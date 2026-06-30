@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 DOWNLOAD_DIR = ROOT / "downloads"
@@ -22,8 +22,26 @@ FFPROBE = shutil.which("ffprobe") or "ffprobe"
 # 画布
 W, H = 1080, 1920
 HALF = H // 2          # 960，上下各一半
-CLIP_SEC = 5           # 每段时长
+CLIP_SEC = 5           # 第二幕每段时长
+UPLOAD_SEC = 2.5       # 第一幕「上传」时长
+FPS = 30
 KF_INNER_W = 288       # 关键帧内容宽度，+ 边框 6*2 = 300
+
+_FONT_CANDIDATES = [
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/SFNS.ttf",
+]
+
+
+def load_font(size: int):
+    for f in _FONT_CANDIDATES:
+        if Path(f).exists():
+            try:
+                return ImageFont.truetype(f, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
 
 
 def library() -> list[Path]:
@@ -41,6 +59,49 @@ def duration(path: Path) -> float:
         return float(json.loads(out.stdout)["format"]["duration"])
     except Exception:
         return 0.0
+
+
+def has_audio(path: Path) -> bool:
+    out = subprocess.run(
+        [FFPROBE, "-v", "error", "-select_streams", "a", "-show_entries",
+         "stream=index", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    return bool(out.stdout.strip())
+
+
+def render_upload_frames(framed_path: Path, out_dir: Path) -> int:
+    """第一幕：黑底 + 居中关键帧 + 0→100% 进度条，逐帧渲染。返回帧数。"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    kf = Image.open(framed_path).convert("RGBA")
+    fw, fh = kf.size
+    cx, cy = W // 2, H // 2
+    fx, fy = cx - fw // 2, cy - fh // 2
+
+    bar_w, bar_h = 460, 16
+    bx, by = (W - bar_w) // 2, cy + fh // 2 + 64
+    font = load_font(46)
+
+    n = int(round(FPS * UPLOAD_SEC))
+    for i in range(n):
+        prog = min(1.0, (i + 1) / n)
+        pct = int(round(prog * 100))
+        canvas = Image.new("RGB", (W, H), (8, 9, 13))
+        canvas.paste(kf, (fx, fy), kf)
+        d = ImageDraw.Draw(canvas)
+
+        label = f"Uploading  {pct}%"
+        tw = d.textlength(label, font=font)
+        d.text((cx - tw / 2, by - 70), label, font=font, fill=(255, 255, 255))
+
+        d.rounded_rectangle([bx, by, bx + bar_w, by + bar_h],
+                            radius=bar_h // 2, fill=(40, 44, 60))
+        fwid = int(bar_w * prog)
+        if fwid > 2:
+            d.rounded_rectangle([bx, by, bx + fwid, by + bar_h],
+                                radius=bar_h // 2, fill=(25, 211, 162))
+        canvas.save(out_dir / f"f_{i:04d}.png")
+    return n
 
 
 def frame_image(src: Path, dst: Path,
@@ -113,40 +174,68 @@ def make_one(idx: int = 0) -> dict:
     framed = TMP / f"frame_{stamp}.png"
     frame_image(raw_kf, framed)
 
-    # 2) 上下两段 5 秒
+    # 第一幕：上传进度（PIL 逐帧 → 视频）
+    p1dir = TMP / f"p1_{stamp}"
+    render_upload_frames(framed, p1dir)
+    phase1 = TMP / f"phase1_{stamp}.mp4"
+    r = subprocess.run(
+        [FFMPEG, "-y", "-framerate", str(FPS), "-i", str(p1dir / "f_%04d.png"),
+         "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
+         "-pix_fmt", "yuv420p", str(phase1)],
+        capture_output=True, text=True,
+    )
+    if not phase1.exists() or phase1.stat().st_size == 0:
+        raise RuntimeError("第一幕渲染失败: " + r.stderr[-400:])
+
+    # 第二幕素材：上下两段 5 秒
     clips = pick_clips(vids, 2)
     (top, tdur), (bot, bdur) = clips[0], clips[1]
     ts_top = random.uniform(0, max(0, tdur - CLIP_SEC))
     ts_bot = random.uniform(0, max(0, bdur - CLIP_SEC))
+    use_audio = has_audio(top)
 
     out = OUTPUT_DIR / f"remix_{stamp}.mp4"
+    # 第一幕(phase1) ⊕ 第二幕(上下视频淡入 + 居中关键帧) 拼接
+    scale = (f"scale={W}:{HALF}:force_original_aspect_ratio=increase,"
+             f"crop={W}:{HALF},setsar=1,fps={FPS}")
     fc = (
-        f"[0:v]scale={W}:{HALF}:force_original_aspect_ratio=increase,"
-        f"crop={W}:{HALF},setsar=1[t];"
-        f"[1:v]scale={W}:{HALF}:force_original_aspect_ratio=increase,"
-        f"crop={W}:{HALF},setsar=1[b];"
-        f"[t][b]vstack=inputs=2[bg];"
-        f"[bg][2:v]overlay=(W-w)/2:(H-h)/2[v]"
+        f"[1:v]{scale}[t];[2:v]{scale}[b];"
+        f"[t][b]vstack=inputs=2[stg];"
+        f"[stg]fade=t=in:st=0:d=0.4[stf];"
+        f"[stf][3:v]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps={FPS}[p2];"
+        f"[0:v]format=yuv420p,setsar=1,fps={FPS}[p1];"
+        f"[p1][p2]concat=n=2:v=1:a=0[v]"
     )
     cmd = [
         FFMPEG, "-y",
-        "-ss", f"{ts_top:.2f}", "-t", str(CLIP_SEC), "-i", str(top),
-        "-ss", f"{ts_bot:.2f}", "-t", str(CLIP_SEC), "-i", str(bot),
-        "-i", str(framed),
-        "-filter_complex", fc,
-        "-map", "[v]", "-map", "0:a?",
-        "-t", str(CLIP_SEC), "-r", "30",
-        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-shortest",
-        str(out),
+        "-i", str(phase1),                                          # 0
+        "-ss", f"{ts_top:.2f}", "-t", str(CLIP_SEC), "-i", str(top),  # 1
+        "-ss", f"{ts_bot:.2f}", "-t", str(CLIP_SEC), "-i", str(bot),  # 2
+        "-loop", "1", "-t", str(CLIP_SEC), "-i", str(framed),         # 3
     ]
+    if use_audio:
+        cmd += ["-f", "lavfi", "-t", f"{UPLOAD_SEC}",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]  # 4
+        fc += (";[4:a]asetpts=PTS-STARTPTS[s1];[1:a]asetpts=PTS-STARTPTS[s2];"
+               "[s1][s2]concat=n=2:v=0:a=1[a]")
+        cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+                "-c:a", "aac"]
+    else:
+        cmd += ["-filter_complex", fc, "-map", "[v]"]
+    cmd += ["-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
+            "-pix_fmt", "yuv420p", str(out)]
+
     r = subprocess.run(cmd, capture_output=True, text=True)
     if not out.exists() or out.stat().st_size == 0:
         raise RuntimeError("合成失败: " + r.stderr[-400:])
 
     # 清理临时文件
-    for p in (raw_kf, framed):
-        p.unlink(missing_ok=True)
+    raw_kf.unlink(missing_ok=True)
+    framed.unlink(missing_ok=True)
+    phase1.unlink(missing_ok=True)
+    for f in p1dir.glob("*.png"):
+        f.unlink(missing_ok=True)
+    p1dir.rmdir()
 
     return {
         "file": out.name,

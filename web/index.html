@@ -95,7 +95,7 @@
     </div>
 
     <div class="card">
-      <p class="sec-title">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（上下两段5秒 + 居中带边关键帧）</span></p>
+      <p class="sec-title">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（第一幕上传进度 → 第二幕上下两段视频淡入）</span></p>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="badge">视频库 <b id="libCount" style="color:var(--acc)">0</b> 条</span>
         <label style="margin:0;display:flex;align-items:center;gap:6px">数量
@@ -104,7 +104,7 @@
         <button id="btnCompose" class="primary">🎬 生成合成视频</button>
         <span id="cStatus" style="color:var(--mut);font-size:12px"></span>
       </div>
-      <p class="hint">每次随机抽帧 + 随机两段视频，每点一次都不一样。成品存于 <code>outputs/</code>。</p>
+      <p class="hint">两幕编排：第一幕黑底+居中关键帧+Uploading 0→100%（约2.5秒），到100%后第二幕上下两段视频淡入（5秒）。每次随机，成品存于 <code>outputs/</code>。</p>
       <div id="gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px"></div>
     </div>
   </div>
