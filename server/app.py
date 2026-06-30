@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -20,21 +21,24 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from server import compose
+from server.runtime import resource_dir, app_dir, bin_path
 
-ROOT = Path(__file__).resolve().parent.parent
-WEB = ROOT / "web"
-DATA = ROOT / "data"
+APP = app_dir()                 # 可写数据根（打包后 = exe 所在目录）
+WEB = resource_dir() / "web"    # 只读前端资源
+DATA = APP / "data"
 ARCHIVE_DIR = DATA / "archive"
 COOKIE_DIR = DATA / "cookies"
-DOWNLOAD_DIR = ROOT / "downloads"
-OUTPUT_DIR = ROOT / "outputs"
+DOWNLOAD_DIR = APP / "downloads"
+OUTPUT_DIR = APP / "outputs"
 KEYFRAME_DIR = DATA / "tmp" / "keyframe"
 ACCOUNTS_FILE = DATA / "accounts.json"
 
 for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR, OUTPUT_DIR, KEYFRAME_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-YTDLP = shutil.which("yt-dlp") or "yt-dlp"
+YTDLP = bin_path("yt-dlp")
+_FFMPEG_BIN = bin_path("ffmpeg")
+FFMPEG_DIR = str(Path(_FFMPEG_BIN).parent) if Path(_FFMPEG_BIN).exists() else None
 
 app = FastAPI(title="TK Backup")
 # 本地工具，允许跨源（便于在嵌入式预览面板里也能访问后端）
@@ -121,6 +125,8 @@ def build_cmd(acc: dict) -> list[str]:
         "PROG|%(progress.status)s|%(info.id)s|%(progress._percent_str)s|"
         "%(progress._speed_str)s|%(progress._eta_str)s|%(info.title).50s",
     ]
+    if FFMPEG_DIR:                       # 让 yt-dlp 用到（内置的）ffmpeg
+        cmd += ["--ffmpeg-location", FFMPEG_DIR]
     cookie = COOKIE_DIR / f"{acc['id']}.txt"
     if cookie.exists() and cookie.stat().st_size > 0:
         cmd += ["--cookies", str(cookie)]
@@ -371,7 +377,12 @@ def api_open(name: str):
     """在 Finder 中打开账号的下载目录"""
     folder = DOWNLOAD_DIR / safe_name(name)
     folder.mkdir(parents=True, exist_ok=True)
-    os.system(f'open "{folder}"')
+    if sys.platform == "darwin":
+        os.system(f'open "{folder}"')
+    elif os.name == "nt":
+        os.startfile(str(folder))  # type: ignore[attr-defined]
+    else:
+        os.system(f'xdg-open "{folder}"')
     return {"ok": True, "path": str(folder)}
 
 

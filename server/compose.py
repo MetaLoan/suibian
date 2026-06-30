@@ -12,13 +12,15 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, ImageFilter, ImageDraw, ImageFont
 
-ROOT = Path(__file__).resolve().parent.parent
-DOWNLOAD_DIR = ROOT / "downloads"
-OUTPUT_DIR = ROOT / "outputs"
-TMP = ROOT / "data" / "tmp"
+from server.runtime import app_dir, bin_path
+
+APP = app_dir()
+DOWNLOAD_DIR = APP / "downloads"
+OUTPUT_DIR = APP / "outputs"
+TMP = APP / "data" / "tmp"
 KEYFRAME_DIR = TMP / "keyframe"
-FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
-FFPROBE = shutil.which("ffprobe") or "ffprobe"
+FFMPEG = bin_path("ffmpeg")
+FFPROBE = bin_path("ffprobe")
 
 # 画布
 W, H = 1080, 1920
@@ -36,6 +38,9 @@ _FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/SFNS.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",          # Windows 加粗
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
 ]
 
 

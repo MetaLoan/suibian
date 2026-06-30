@@ -48,6 +48,28 @@
 - **存储**：`downloads/<账号名>/<视频ID>.mp4`，只存视频文件。
 - **多账号**：顺序处理，避免触发风控；停止后当前账号的已下文件保留。
 
+## 打包成 Windows 单文件 exe（零安装）
+
+成品是一个 `TK-Backup.exe`，**双击即用**，yt-dlp 和 ffmpeg 已内置，目标电脑无需装任何东西。
+> ⚠️ Windows 的 `.exe` 只能在 Windows 上构建，Mac 打不出来。两种方式任选其一：
+
+### 方式 A：GitHub Actions 云端打包（无需 Windows 机器）
+
+1. 把仓库推到 GitHub
+2. 仓库页 → **Actions** → 选 **build-windows** → **Run workflow**（或打个 `v1.0` 的 tag 自动触发）
+3. 跑完在该次运行的 **Artifacts** 里下载 `TK-Backup-windows`，解压得到 `TK-Backup.exe`
+
+### 方式 B：在 Windows 上本地一键打包
+
+把项目拷到 Windows，装好 [Python 3.12+](https://www.python.org/downloads/)，双击运行 **`build_windows.bat`**。
+脚本自动建环境、下载内置 yt-dlp/ffmpeg、打包，产物在 `dist\TK-Backup.exe`。
+
+### exe 运行说明
+
+- 双击后弹出一个黑色命令行窗口（服务），并自动打开浏览器；**关掉窗口即退出**。
+- `downloads/`、`outputs/`、`data/` 会生成在 **exe 同目录**下，放哪跑就存哪。
+- 首次启动稍慢（自解压），之后正常。
+
 ## 导出 Cookie
 
 浏览器装「Get cookies.txt LOCALLY」之类扩展，登录 TikTok 后导出 `cookies.txt`，把内容粘贴到对应账号的 Cookie 框即可。
