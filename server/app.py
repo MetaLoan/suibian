@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -27,9 +27,10 @@ ARCHIVE_DIR = DATA / "archive"
 COOKIE_DIR = DATA / "cookies"
 DOWNLOAD_DIR = ROOT / "downloads"
 OUTPUT_DIR = ROOT / "outputs"
+KEYFRAME_DIR = DATA / "tmp" / "keyframe"
 ACCOUNTS_FILE = DATA / "accounts.json"
 
-for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR, OUTPUT_DIR):
+for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR, OUTPUT_DIR, KEYFRAME_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 YTDLP = shutil.which("yt-dlp") or "yt-dlp"
@@ -221,6 +222,14 @@ class StartIn(BaseModel):
 class ComposeIn(BaseModel):
     count: int = 1
     sources: list[str] | None = None
+    upload_sec: float | None = None
+    clip_sec: float | None = None
+    layout: str = "vstack"
+    keyframe_id: str | None = None
+
+
+class PickIn(BaseModel):
+    sources: list[str] | None = None
 
 
 # ----------------------------- API -----------------------------
@@ -386,13 +395,38 @@ async def api_compose(body: ComposeIn):
     await hub.publish({"type": "compose_start", "count": n})
     for i in range(n):
         try:
-            r = await asyncio.to_thread(compose.make_one, i, body.sources)
+            r = await asyncio.to_thread(
+                compose.make_one, i, body.sources,
+                body.upload_sec, body.clip_sec, body.layout, body.keyframe_id)
             results.append(r)
             await hub.publish({"type": "compose_done", **r, "index": i, "total": n})
         except Exception as e:  # noqa
             await hub.publish({"type": "log", "id": "compose", "line": f"[合成失败] {e}"})
     await hub.publish({"type": "compose_end", "made": len(results)})
     return {"ok": True, "results": results}
+
+
+@app.post("/api/keyframe/pick")
+async def api_keyframe_pick(body: PickIn):
+    try:
+        r = await asyncio.to_thread(compose.pick_keyframe, body.sources)
+    except Exception as e:  # noqa
+        raise HTTPException(400, str(e))
+    return {**r, "url": f"/keyframe/{r['id']}.png"}
+
+
+@app.post("/api/keyframe/upload")
+async def api_keyframe_upload(file: UploadFile = File(...)):
+    tmp = KEYFRAME_DIR / f"up_{file.filename}"
+    data = await file.read()
+    tmp.write_bytes(data)
+    try:
+        r = await asyncio.to_thread(compose.frame_uploaded, tmp)
+    except Exception as e:  # noqa
+        raise HTTPException(400, f"图片处理失败: {e}")
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {**r, "url": f"/keyframe/{r['id']}.png"}
 
 
 @app.delete("/api/outputs/{name}")
@@ -409,4 +443,5 @@ def index():
 
 
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
+app.mount("/keyframe", StaticFiles(directory=KEYFRAME_DIR), name="keyframe")
 app.mount("/", StaticFiles(directory=WEB), name="web")

@@ -96,17 +96,48 @@
 
     <div class="card">
       <p class="sec-title">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（第一幕上传进度 → 第二幕上下两段视频淡入）</span></p>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <label style="margin:0;display:flex;align-items:center;gap:6px">取材账号
-          <select id="cSource" style="margin:0;width:auto;min-width:150px"></select>
+          <select id="cSource" style="margin:0;width:auto;min-width:140px"></select>
+        </label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">拼接
+          <select id="cLayout" style="margin:0;width:auto">
+            <option value="vstack">上下拼</option>
+            <option value="hstack">左右拼</option>
+          </select>
         </label>
         <label style="margin:0;display:flex;align-items:center;gap:6px">数量
-          <input id="cCount" type="number" min="1" max="20" value="3" style="width:64px;margin:0">
+          <input id="cCount" type="number" min="1" max="20" value="3" style="width:60px;margin:0">
         </label>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px">
+        <label style="margin:0;display:flex;align-items:center;gap:6px">第一幕(秒)
+          <input id="cUp" type="number" min="0.5" max="15" step="0.5" value="2.5" style="width:70px;margin:0">
+        </label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">第二幕(秒)
+          <input id="cClip" type="number" min="1" max="60" step="1" value="5" style="width:70px;margin:0">
+        </label>
+        <span class="hint" style="margin:0">第二幕不够时长会自动接其他视频凑满</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px">
+        <div id="kfPreview" style="width:60px;height:90px;border-radius:6px;background:#000 center/contain no-repeat;border:1px solid var(--line);flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--mut);margin-bottom:6px">中间关键帧：<span id="kfState">随机（每个视频各抽一张）</span></div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            <button id="btnKfPick" style="padding:5px 10px;font-size:12px">🎲 抽取 / 重抽</button>
+            <button id="btnKfUpload" style="padding:5px 10px;font-size:12px">📁 上传图片</button>
+            <button id="btnKfClear" style="padding:5px 10px;font-size:12px" disabled>↺ 用随机</button>
+            <input id="kfFile" type="file" accept="image/*" style="display:none">
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
         <button id="btnCompose" class="primary">🎬 生成合成视频</button>
         <span id="cStatus" style="color:var(--mut);font-size:12px"></span>
       </div>
-      <p class="hint">两幕编排：第一幕黑底+居中关键帧+Uploading 0→100%（约2.5秒），到100%后第二幕上下两段视频淡入（5秒）。每次随机，成品存于 <code>outputs/</code>。</p>
+      <p class="hint">两幕编排：第一幕黑底+居中关键帧+AI Generating 0→100%，到100%后第二幕视频淡入。成品存于 <code>outputs/</code>。</p>
       <div id="gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px"></div>
     </div>
   </div>
@@ -329,15 +360,54 @@ async function refreshGallery(){
     refreshGallery();
   });
 }
+// 关键帧选择
+let kfId = null;
+function setKf(id, url, label){
+  kfId = id;
+  $('#kfPreview').style.backgroundImage = url ? `url(${url})` : 'none';
+  $('#kfState').textContent = label;
+  $('#btnKfClear').disabled = !id;
+}
+$('#btnKfPick').onclick = async ()=>{
+  const src = $('#cSource').value;
+  $('#btnKfPick').disabled = true; $('#kfState').textContent = '抽取中…';
+  try{
+    const r = await api('/keyframe/pick', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sources: src?[src]:null})});
+    setKf(r.id, r.url+'?t='+Date.now(), '已抽取：'+r.from+'（不满意可再点重抽）');
+  }catch(e){ alert('抽取失败: '+e.message); $('#kfState').textContent='随机（每个视频各抽一张）'; }
+  finally{ $('#btnKfPick').disabled = false; }
+};
+$('#btnKfUpload').onclick = ()=> $('#kfFile').click();
+$('#kfFile').onchange = async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  $('#kfState').textContent = '上传处理中…';
+  try{
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch('/api/keyframe/upload', {method:'POST', body:fd});
+    if(!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    setKf(j.id, j.url+'?t='+Date.now(), '已上传自定义图片');
+  }catch(e){ alert('上传失败: '+e.message); $('#kfState').textContent='随机（每个视频各抽一张）'; }
+  e.target.value = '';
+};
+$('#btnKfClear').onclick = ()=> setKf(null, null, '随机（每个视频各抽一张）');
+
 $('#btnCompose').onclick = async ()=>{
   const n = Math.max(1, Math.min(20, parseInt($('#cCount').value)||1));
   const src = $('#cSource').value;
   const sources = src ? [src] : null;
+  const body = {
+    count: n, sources,
+    layout: $('#cLayout').value,
+    upload_sec: parseFloat($('#cUp').value)||2.5,
+    clip_sec: parseFloat($('#cClip').value)||5,
+    keyframe_id: kfId,
+  };
   const btn = $('#btnCompose');
   btn.disabled = true; $('#cStatus').textContent = '生成中…';
-  logLine(`🎬 开始生成 ${n} 个合成视频（取材：${src||'全部账号'}）…`, 'cmd');
+  logLine(`🎬 开始生成 ${n} 个（${body.layout==='hstack'?'左右拼':'上下拼'}，第一幕${body.upload_sec}s/第二幕${body.clip_sec}s，取材：${src||'全部账号'}）…`, 'cmd');
   try{
-    const r = await api('/compose', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({count:n, sources})});
+    const r = await api('/compose', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     $('#cStatus').textContent = `完成 ${r.results.length} 个`;
     await refreshGallery();
   }catch(e){ $('#cStatus').textContent=''; alert('生成失败: '+e.message); }

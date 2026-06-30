@@ -16,16 +16,21 @@ ROOT = Path(__file__).resolve().parent.parent
 DOWNLOAD_DIR = ROOT / "downloads"
 OUTPUT_DIR = ROOT / "outputs"
 TMP = ROOT / "data" / "tmp"
+KEYFRAME_DIR = TMP / "keyframe"
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
 # 画布
 W, H = 1080, 1920
 HALF = H // 2          # 960，上下各一半
-CLIP_SEC = 5           # 第二幕每段时长
-UPLOAD_SEC = 2.5       # 第一幕「上传」时长
+CLIP_SEC = 5           # 第二幕默认时长
+UPLOAD_SEC = 2.5       # 第一幕默认「上传」时长
 FPS = 30
 KF_INNER_W = 288       # 关键帧内容宽度，+ 边框 6*2 = 300
+
+
+def _new_id() -> str:
+    return f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
 
 _FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -90,7 +95,8 @@ def has_audio(path: Path) -> bool:
     return bool(out.stdout.strip())
 
 
-def render_upload_frames(framed_path: Path, out_dir: Path) -> int:
+def render_upload_frames(framed_path: Path, out_dir: Path,
+                         upload_sec: float = UPLOAD_SEC) -> int:
     """第一幕：黑底 + 居中关键帧 + 0→100% 进度条，逐帧渲染。返回帧数。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     kf = Image.open(framed_path).convert("RGBA")
@@ -107,7 +113,7 @@ def render_upload_frames(framed_path: Path, out_dir: Path) -> int:
     cap_a, cap_b = "When I Upload My Girl On ", "@OKBOX"
     cy_cap = fy - 96
 
-    n = int(round(FPS * UPLOAD_SEC))
+    n = max(1, int(round(FPS * upload_sec)))
     for i in range(n):
         prog = min(1.0, (i + 1) / n)
         pct = int(round(prog * 100))
@@ -161,53 +167,109 @@ def frame_image(src: Path, dst: Path,
     canvas.save(dst)
 
 
-def pick_clips(vids: list[Path], n: int = 2) -> list[tuple[Path, float]]:
-    """随机挑 n 段时长 >= CLIP_SEC 的视频；不够则重复使用"""
-    pool = vids[:]
-    random.shuffle(pool)
-    chosen: list[tuple[Path, float]] = []
-    for v in pool:
-        d = duration(v)
-        if d >= CLIP_SEC:
-            chosen.append((v, d))
-        if len(chosen) >= n:
-            break
-    if not chosen:                       # 库里全是短视频，退而求其次
-        for v in pool:
-            chosen.append((v, max(duration(v), CLIP_SEC)))
-            if len(chosen) >= n:
-                break
-    while len(chosen) < n and chosen:    # 数量不足则重复
-        chosen.append(random.choice(chosen))
-    return chosen[:n]
+def build_segments(vids: list[Path], target: float,
+                   dur_cache: dict | None = None) -> list[tuple[Path, float, float]]:
+    """为一个画面拼出总时长 target 的片段序列 [(视频, 起点, 取多少秒)]。
+    单个视频不够 target 就再随机接其他视频，直到凑满。"""
+    cache = dur_cache if dur_cache is not None else {}
+
+    def dur(v):
+        if v not in cache:
+            cache[v] = duration(v)
+        return cache[v]
+
+    segs: list[tuple[Path, float, float]] = []
+    remaining = target
+    guard = 0
+    while remaining > 0.1 and guard < 300:
+        guard += 1
+        v = random.choice(vids)
+        d = dur(v)
+        if d <= 0.3:
+            continue
+        take = min(d, remaining)
+        start = random.uniform(0, d - take) if d - take > 0.05 else 0.0
+        segs.append((v, round(start, 2), round(take, 2)))
+        remaining -= take
+    if not segs:
+        segs.append((random.choice(vids), 0.0, round(target, 2)))
+    return segs
 
 
-def make_one(idx: int = 0, sources: list[str] | None = None) -> dict:
+def pick_keyframe(sources: list[str] | None = None) -> dict:
+    """随机抽一帧（随机视频 ~50% 处），描边存为预览，返回 id 供合成使用。"""
     vids = library(sources)
     if not vids:
-        raise RuntimeError("该账号下没有视频，请先备份或换个账号")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    TMP.mkdir(parents=True, exist_ok=True)
-    stamp = f"{int(time.time() * 1000)}_{idx}"
-
-    # 1) 关键帧（随机视频 ~50% 处）
+        raise RuntimeError("没有可取材的视频")
+    KEYFRAME_DIR.mkdir(parents=True, exist_ok=True)
     kf_src = random.choice(vids)
     kdur = duration(kf_src)
     ts = kdur * 0.5 if kdur > 0 else 0
-    raw_kf = TMP / f"kf_{stamp}.jpg"
-    r = subprocess.run(
+    kid = _new_id()
+    raw = KEYFRAME_DIR / f"raw_{kid}.jpg"
+    subprocess.run(
         [FFMPEG, "-y", "-ss", f"{ts:.2f}", "-i", str(kf_src),
-         "-frames:v", "1", "-q:v", "2", str(raw_kf)],
+         "-frames:v", "1", "-q:v", "2", str(raw)],
         capture_output=True, text=True,
     )
-    if not raw_kf.exists():
-        raise RuntimeError("抽帧失败: " + r.stderr[-300:])
-    framed = TMP / f"frame_{stamp}.png"
-    frame_image(raw_kf, framed)
+    if not raw.exists():
+        raise RuntimeError("抽帧失败")
+    frame_image(raw, KEYFRAME_DIR / f"{kid}.png")
+    raw.unlink(missing_ok=True)
+    return {"id": kid, "from": kf_src.parent.name + "/" + kf_src.name}
+
+
+def frame_uploaded(src_path: Path) -> dict:
+    """把用户上传的图片描边存为关键帧，返回 id。"""
+    KEYFRAME_DIR.mkdir(parents=True, exist_ok=True)
+    kid = _new_id()
+    frame_image(src_path, KEYFRAME_DIR / f"{kid}.png")
+    return {"id": kid, "from": "(上传)"}
+
+
+def make_one(idx: int = 0, sources: list[str] | None = None,
+             upload_sec: float | None = None, clip_sec: float | None = None,
+             layout: str = "vstack", keyframe_id: str | None = None) -> dict:
+    upload_sec = min(max(float(upload_sec or UPLOAD_SEC), 0.5), 15)
+    clip_sec = min(max(float(clip_sec or CLIP_SEC), 1), 60)
+    layout = "hstack" if layout == "hstack" else "vstack"
+
+    vids = library(sources)
+    if not vids:
+        raise RuntimeError("该账号下没有视频，请先备份或换个取材范围")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    TMP.mkdir(parents=True, exist_ok=True)
+    stamp = f"{int(time.time() * 1000)}_{idx}"
+    dur_cache: dict = {}
+
+    # 1) 关键帧：自定义（抽取/上传）或随机
+    raw_kf = None
+    if keyframe_id:
+        framed = KEYFRAME_DIR / f"{keyframe_id}.png"
+        if not framed.exists():
+            raise RuntimeError("指定的关键帧不存在，请重新抽取或上传")
+        kf_from = "(自定义)"
+        cleanup_framed = False
+    else:
+        kf_src = random.choice(vids)
+        kdur = duration(kf_src)
+        ts = kdur * 0.5 if kdur > 0 else 0
+        raw_kf = TMP / f"kf_{stamp}.jpg"
+        r = subprocess.run(
+            [FFMPEG, "-y", "-ss", f"{ts:.2f}", "-i", str(kf_src),
+             "-frames:v", "1", "-q:v", "2", str(raw_kf)],
+            capture_output=True, text=True,
+        )
+        if not raw_kf.exists():
+            raise RuntimeError("抽帧失败: " + r.stderr[-300:])
+        framed = TMP / f"frame_{stamp}.png"
+        frame_image(raw_kf, framed)
+        kf_from = kf_src.parent.name + "/" + kf_src.name
+        cleanup_framed = True
 
     # 第一幕：上传进度（PIL 逐帧 → 视频）
     p1dir = TMP / f"p1_{stamp}"
-    render_upload_frames(framed, p1dir)
+    render_upload_frames(framed, p1dir, upload_sec)
     phase1 = TMP / f"phase1_{stamp}.mp4"
     r = subprocess.run(
         [FFMPEG, "-y", "-framerate", str(FPS), "-i", str(p1dir / "f_%04d.png"),
@@ -218,41 +280,64 @@ def make_one(idx: int = 0, sources: list[str] | None = None) -> dict:
     if not phase1.exists() or phase1.stat().st_size == 0:
         raise RuntimeError("第一幕渲染失败: " + r.stderr[-400:])
 
-    # 第二幕素材：上下两段 5 秒
-    clips = pick_clips(vids, 2)
-    (top, tdur), (bot, bdur) = clips[0], clips[1]
-    ts_top = random.uniform(0, max(0, tdur - CLIP_SEC))
-    ts_bot = random.uniform(0, max(0, bdur - CLIP_SEC))
-    use_audio = has_audio(top)
+    # 第二幕素材：两个画面各凑满 clip_sec（不够就接其他视频）
+    seg_a = build_segments(vids, clip_sec, dur_cache)   # 上 / 左
+    seg_b = build_segments(vids, clip_sec, dur_cache)   # 下 / 右
+
+    if layout == "hstack":
+        pw, ph, stackf = W // 2, H, "hstack=inputs=2"
+    else:
+        pw, ph, stackf = W, HALF, "vstack=inputs=2"
+    scale = (f"scale={pw}:{ph}:force_original_aspect_ratio=increase,"
+             f"crop={pw}:{ph},setsar=1,fps={FPS}")
 
     out = OUTPUT_DIR / f"remix_{stamp}.mp4"
-    # 第一幕(phase1) ⊕ 第二幕(上下视频淡入 + 居中关键帧) 拼接
-    scale = (f"scale={W}:{HALF}:force_original_aspect_ratio=increase,"
-             f"crop={W}:{HALF},setsar=1,fps={FPS}")
-    fc = (
-        f"[1:v]{scale}[t];[2:v]{scale}[b];"
-        f"[t][b]vstack=inputs=2[stg];"
-        f"[stg]fade=t=in:st=0:d=0.4[stf];"
-        f"[stf][3:v]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps={FPS}[p2];"
-        f"[0:v]format=yuv420p,setsar=1,fps={FPS}[p1];"
-        f"[p1][p2]concat=n=2:v=1:a=0[v]"
-    )
-    cmd = [
-        FFMPEG, "-y",
-        "-i", str(phase1),                                          # 0
-        "-ss", f"{ts_top:.2f}", "-t", str(CLIP_SEC), "-i", str(top),  # 1
-        "-ss", f"{ts_bot:.2f}", "-t", str(CLIP_SEC), "-i", str(bot),  # 2
-        "-loop", "1", "-t", str(CLIP_SEC), "-i", str(framed),         # 3
-    ]
+    cmd = [FFMPEG, "-y", "-i", str(phase1)]              # input 0 = 第一幕
+    fc: list[str] = []
+    i = 1
+    a_idx, b_idx = [], []
+    for v, s, t in seg_a:
+        cmd += ["-ss", f"{s:.2f}", "-t", f"{t:.2f}", "-i", str(v)]
+        a_idx.append(i); i += 1
+    for v, s, t in seg_b:
+        cmd += ["-ss", f"{s:.2f}", "-t", f"{t:.2f}", "-i", str(v)]
+        b_idx.append(i); i += 1
+    kf_input = i
+    cmd += ["-loop", "1", "-t", f"{clip_sec:.2f}", "-i", str(framed)]; i += 1
+
+    # 两个画面各自缩放→拼接成 clip_sec 长
+    for k, j in enumerate(a_idx):
+        fc.append(f"[{j}:v]{scale}[a{k}]")
+    fc.append("".join(f"[a{k}]" for k in range(len(a_idx)))
+              + f"concat=n={len(a_idx)}:v=1:a=0[pa]")
+    for k, j in enumerate(b_idx):
+        fc.append(f"[{j}:v]{scale}[b{k}]")
+    fc.append("".join(f"[b{k}]" for k in range(len(b_idx)))
+              + f"concat=n={len(b_idx)}:v=1:a=0[pb]")
+    fc.append(f"[pa][pb]{stackf}[stg]")
+    fc.append("[stg]fade=t=in:st=0:d=0.4[stf]")
+    fc.append(f"[stf][{kf_input}:v]overlay=(W-w)/2:(H-h)/2,"
+              f"format=yuv420p,fps={FPS}[p2]")
+    fc.append(f"[0:v]format=yuv420p,setsar=1,fps={FPS}[p1]")
+    fc.append("[p1][p2]concat=n=2:v=1:a=0[v]")
+
+    # 音频：第一幕静音 + 第二幕上/左画面各段原声拼接（全部有音轨时）
+    use_audio = all(has_audio(v) for v, _, _ in seg_a)
     if use_audio:
-        cmd += ["-f", "lavfi", "-t", f"{UPLOAD_SEC}",
-                "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]  # 4
-        fc += (";[4:a]asetpts=PTS-STARTPTS[s1];[1:a]asetpts=PTS-STARTPTS[s2];"
-               "[s1][s2]concat=n=2:v=0:a=1[a]")
-        cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
-                "-c:a", "aac"]
-    else:
-        cmd += ["-filter_complex", fc, "-map", "[v]"]
+        sil = i
+        cmd += ["-f", "lavfi", "-t", f"{upload_sec:.2f}",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]; i += 1
+        afmt = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+        for k, j in enumerate(a_idx):
+            fc.append(f"[{j}:a]{afmt},asetpts=PTS-STARTPTS[aa{k}]")
+        fc.append("".join(f"[aa{k}]" for k in range(len(a_idx)))
+                  + f"concat=n={len(a_idx)}:v=0:a=1[a2]")
+        fc.append(f"[{sil}:a]{afmt},asetpts=PTS-STARTPTS[a1]")
+        fc.append("[a1][a2]concat=n=2:v=0:a=1[a]")
+
+    cmd += ["-filter_complex", ";".join(fc), "-map", "[v]"]
+    if use_audio:
+        cmd += ["-map", "[a]", "-c:a", "aac"]
     cmd += ["-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
             "-pix_fmt", "yuv420p", str(out)]
 
@@ -260,19 +345,30 @@ def make_one(idx: int = 0, sources: list[str] | None = None) -> dict:
     if not out.exists() or out.stat().st_size == 0:
         raise RuntimeError("合成失败: " + r.stderr[-400:])
 
-    # 清理临时文件
-    raw_kf.unlink(missing_ok=True)
-    framed.unlink(missing_ok=True)
+    # 清理临时文件（自定义关键帧保留，供批量复用）
+    if raw_kf:
+        raw_kf.unlink(missing_ok=True)
+    if cleanup_framed:
+        framed.unlink(missing_ok=True)
     phase1.unlink(missing_ok=True)
     for f in p1dir.glob("*.png"):
         f.unlink(missing_ok=True)
     p1dir.rmdir()
 
+    def label(segs):
+        names = []
+        for v, _, _ in segs:
+            n = v.parent.name + "/" + v.name
+            if n not in names:
+                names.append(n)
+        return names
+
     return {
         "file": out.name,
-        "keyframe_from": kf_src.parent.name + "/" + kf_src.name,
-        "top": top.parent.name + "/" + top.name,
-        "bottom": bot.parent.name + "/" + bot.name,
+        "keyframe_from": kf_from,
+        "layout": layout,
+        "top": label(seg_a),
+        "bottom": label(seg_b),
         "ts": time.time(),
     }
 
