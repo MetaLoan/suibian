@@ -6,7 +6,8 @@ import webbrowser
 
 import uvicorn
 
-from server.app import app
+from server import updater
+from server.version import __version__
 
 
 def _free_port(preferred: int = 8848) -> int:
@@ -25,6 +26,16 @@ def _free_port(preferred: int = 8848) -> int:
 
 
 def main():
+    print("=" * 48)
+    print(f"  TK 矩阵备份  版本 {__version__}")
+    print("=" * 48)
+
+    # 启动即检查远端最新 Release，有新版则自动更新并重启
+    if updater.maybe_update():
+        return  # 已启动更新脚本，退出当前进程让其替换
+
+    from server.app import app  # 延迟导入，确保更新时不必加载整个服务
+
     port = _free_port(8848)
     url = f"http://127.0.0.1:{port}"
 
@@ -33,8 +44,7 @@ def main():
         webbrowser.open(url)
 
     threading.Thread(target=open_browser, daemon=True).start()
-    print("=" * 48)
-    print(f"  TK 矩阵备份已启动 →  {url}")
+    print(f"  已启动 →  {url}")
     print("  关闭此窗口即退出程序。")
     print("=" * 48)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

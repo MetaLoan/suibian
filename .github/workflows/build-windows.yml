@@ -37,6 +37,11 @@ jobs:
           Copy-Item "$d/ffprobe.exe" bin/ffprobe.exe -Force
           Get-ChildItem bin
 
+      - name: 写入版本号 (仅 tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: Set-Content -Path server/version.py -Value "__version__ = '$env:GITHUB_REF_NAME'" -Encoding utf8
+
       - name: 打包 exe
         run: pyinstaller desktop.spec --noconfirm
 
