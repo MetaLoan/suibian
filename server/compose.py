@@ -81,6 +81,11 @@ def render_upload_frames(framed_path: Path, out_dir: Path) -> int:
     bar_w, bar_h = 460, 16
     bx, by = (W - bar_w) // 2, cy + fh // 2 + 64
     font = load_font(46)
+    cap_font = load_font(42)
+
+    # 顶部 meme 标题（静态），@OKBOX 用绿色高亮
+    cap_a, cap_b = "When I Upload My Girl On ", "@OKBOX"
+    cy_cap = fy - 96
 
     n = int(round(FPS * UPLOAD_SEC))
     for i in range(n):
@@ -90,7 +95,13 @@ def render_upload_frames(framed_path: Path, out_dir: Path) -> int:
         canvas.paste(kf, (fx, fy), kf)
         d = ImageDraw.Draw(canvas)
 
-        label = f"Uploading  {pct}%"
+        wa = d.textlength(cap_a, font=cap_font)
+        wb = d.textlength(cap_b, font=cap_font)
+        sx = cx - (wa + wb) / 2
+        d.text((sx, cy_cap), cap_a, font=cap_font, fill=(255, 255, 255))
+        d.text((sx + wa, cy_cap), cap_b, font=cap_font, fill=(25, 211, 162))
+
+        label = f"AI Generating  {pct}%"
         tw = d.textlength(label, font=font)
         d.text((cx - tw / 2, by - 70), label, font=font, fill=(255, 255, 255))
 
