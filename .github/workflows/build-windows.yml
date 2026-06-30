@@ -5,6 +5,9 @@ on:
   push:
     tags: ['v*']            # 打 tag (如 v1.0) 自动构建
 
+permissions:
+  contents: write          # 发布 Release 需要写权限
+
 jobs:
   build:
     runs-on: windows-latest
@@ -37,9 +40,19 @@ jobs:
       - name: 打包 exe
         run: pyinstaller desktop.spec --noconfirm
 
-      - name: 上传产物
+      - name: 上传产物 (Actions Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: TK-Backup-windows
           path: dist/TK-Backup.exe
           if-no-files-found: error
+
+      - name: 发布 Release (仅打 tag 时)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/TK-Backup.exe
+          name: TK 矩阵备份 ${{ github.ref_name }}
+          body: |
+            Windows 单文件版（内置 yt-dlp + ffmpeg，零安装）。
+            下载下方 **TK-Backup.exe**，放进空文件夹双击即用。
