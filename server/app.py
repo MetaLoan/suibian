@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -36,6 +37,11 @@ for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR, OUTPUT_DIR, KEYFRAME_DIR)
 YTDLP = shutil.which("yt-dlp") or "yt-dlp"
 
 app = FastAPI(title="TK Backup")
+# 本地工具，允许跨源（便于在嵌入式预览面板里也能访问后端）
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ----------------------------- 账号存储 -----------------------------
