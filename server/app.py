@@ -18,15 +18,18 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from server import compose
+
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
 DATA = ROOT / "data"
 ARCHIVE_DIR = DATA / "archive"
 COOKIE_DIR = DATA / "cookies"
 DOWNLOAD_DIR = ROOT / "downloads"
+OUTPUT_DIR = ROOT / "outputs"
 ACCOUNTS_FILE = DATA / "accounts.json"
 
-for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR):
+for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR, OUTPUT_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 YTDLP = shutil.which("yt-dlp") or "yt-dlp"
@@ -215,6 +218,10 @@ class StartIn(BaseModel):
     ids: list[str] | None = None
 
 
+class ComposeIn(BaseModel):
+    count: int = 1
+
+
 # ----------------------------- API -----------------------------
 @app.get("/api/accounts")
 def api_accounts():
@@ -352,9 +359,48 @@ def api_open(name: str):
     return {"ok": True, "path": str(folder)}
 
 
+# ----------------------------- 二次创作 -----------------------------
+@app.get("/api/library")
+def api_library():
+    vids = compose.library()
+    return {"count": len(vids)}
+
+
+@app.get("/api/outputs")
+def api_outputs():
+    return compose.list_outputs()
+
+
+@app.post("/api/compose")
+async def api_compose(body: ComposeIn):
+    if not compose.library():
+        raise HTTPException(400, "视频库为空，请先备份一些视频")
+    n = max(1, min(body.count, 20))
+    results = []
+    await hub.publish({"type": "compose_start", "count": n})
+    for i in range(n):
+        try:
+            r = await asyncio.to_thread(compose.make_one, i)
+            results.append(r)
+            await hub.publish({"type": "compose_done", **r, "index": i, "total": n})
+        except Exception as e:  # noqa
+            await hub.publish({"type": "log", "id": "compose", "line": f"[合成失败] {e}"})
+    await hub.publish({"type": "compose_end", "made": len(results)})
+    return {"ok": True, "results": results}
+
+
+@app.delete("/api/outputs/{name}")
+def api_delete_output(name: str):
+    p = OUTPUT_DIR / Path(name).name
+    if p.exists() and p.suffix == ".mp4":
+        p.unlink()
+    return {"ok": True}
+
+
 @app.get("/")
 def index():
     return FileResponse(WEB / "index.html")
 
 
+app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 app.mount("/", StaticFiles(directory=WEB), name="web")

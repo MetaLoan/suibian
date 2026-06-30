@@ -93,6 +93,20 @@
       <p class="sec-title">账号列表</p>
       <div id="accList"></div>
     </div>
+
+    <div class="card">
+      <p class="sec-title">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（上下两段5秒 + 居中带边关键帧）</span></p>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="badge">视频库 <b id="libCount" style="color:var(--acc)">0</b> 条</span>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">数量
+          <input id="cCount" type="number" min="1" max="20" value="3" style="width:64px;margin:0">
+        </label>
+        <button id="btnCompose" class="primary">🎬 生成合成视频</button>
+        <span id="cStatus" style="color:var(--mut);font-size:12px"></span>
+      </div>
+      <p class="hint">每次随机抽帧 + 随机两段视频，每点一次都不一样。成品存于 <code>outputs/</code>。</p>
+      <div id="gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px"></div>
+    </div>
   </div>
 
   <div>
@@ -262,7 +276,9 @@ function handle(m){
       if(m.stats) for(const [id,s] of Object.entries(m.stats)){ const a=accounts.find(x=>x.id===id); if(a) a._st={...a._st,...s}; }
       render(); break;
     case 'run_start': setRunning(true); logLine('=== 开始备份任务 ===','ok'); break;
-    case 'run_end': setRunning(false); logLine('=== 任务结束 ===','ok'); loadAccounts(); break;
+    case 'run_end': setRunning(false); logLine('=== 任务结束 ===','ok'); loadAccounts(); refreshLib(); break;
+    case 'compose_done': logLine(`✔ 合成 ${m.index+1}/${m.total}: ${m.file}（帧自 ${m.keyframe_from.split('/').pop()}）`,'ok'); refreshGallery(); break;
+    case 'compose_end': logLine(`🎬 合成结束，共 ${m.made} 个`,'ok'); break;
     case 'account_start':{ const s=stOf(m.id); if(s){s.state='running';s.downloaded_session=0;} logLine('▶ 账号: '+m.name,'cmd'); render(); break; }
     case 'account_end':{ const s=stOf(m.id); if(s){s.state=m.state;} logLine(`■ 账号结束，本次新增 ${m.downloaded} 个（${m.state}）`, m.state==='error'?'err':'ok'); $('#kFiles');  loadAccounts(); break; }
     case 'item':{ const s=stOf(m.id); if(s){s.item=m.item;s.total=m.total;} render(); break; }
@@ -275,7 +291,48 @@ function handle(m){
   }
 }
 
-loadAccounts().then(connect);
+// ---- 二次创作 ----
+async function refreshLib(){
+  try{ const r = await api('/library'); $('#libCount').textContent = r.count; }catch(e){}
+}
+async function refreshGallery(){
+  let outs = [];
+  try{ outs = await api('/outputs'); }catch(e){ return; }
+  const g = $('#gallery');
+  if(!outs.length){ g.innerHTML = '<div class="empty" style="grid-column:1/-1">还没有成品，点上面生成 →</div>'; return; }
+  g.innerHTML = '';
+  for(const o of outs){
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#000';
+    card.innerHTML = `
+      <video src="/outputs/${o.file}" controls preload="metadata" style="width:100%;display:block;aspect-ratio:9/16;object-fit:contain;background:#000"></video>
+      <div style="display:flex;gap:6px;padding:7px;background:var(--panel2)">
+        <a href="/outputs/${o.file}" download style="flex:1;text-align:center;font-size:12px">⬇ 下载</a>
+        <a href="#" data-f="${o.file}" class="delOut" style="color:var(--red);font-size:12px">删除</a>
+      </div>`;
+    g.appendChild(card);
+  }
+  g.querySelectorAll('.delOut').forEach(a=>a.onclick = async e=>{
+    e.preventDefault();
+    if(!confirm('删除这个成品？')) return;
+    await api('/outputs/'+encodeURIComponent(a.dataset.f), {method:'DELETE'});
+    refreshGallery();
+  });
+}
+$('#btnCompose').onclick = async ()=>{
+  const n = Math.max(1, Math.min(20, parseInt($('#cCount').value)||1));
+  const btn = $('#btnCompose');
+  btn.disabled = true; $('#cStatus').textContent = '生成中…';
+  logLine(`🎬 开始生成 ${n} 个合成视频…`, 'cmd');
+  try{
+    const r = await api('/compose', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({count:n})});
+    $('#cStatus').textContent = `完成 ${r.results.length} 个`;
+    await refreshGallery();
+  }catch(e){ $('#cStatus').textContent=''; alert('生成失败: '+e.message); }
+  finally{ btn.disabled = false; }
+};
+
+loadAccounts().then(()=>{ connect(); refreshLib(); refreshGallery(); });
 </script>
 </body>
 </html>
