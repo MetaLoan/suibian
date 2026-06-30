@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TK 矩阵备份</title>
+<style>
+  :root{
+    --bg:#0e0f13; --panel:#171922; --panel2:#1f2230; --line:#2a2e3e;
+    --txt:#e6e8ef; --mut:#8b90a6; --acc:#19d3a2; --accd:#0fae84;
+    --red:#ff5d6c; --blue:#5b8dff; --amber:#ffb454;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",Segoe UI,sans-serif;
+    background:var(--bg);color:var(--txt)}
+  header{display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:rgba(14,15,19,.92);backdrop-filter:blur(8px);z-index:5}
+  header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.3px}
+  header .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--acc),var(--blue));
+    display:grid;place-items:center;font-weight:800;color:#04130e}
+  .grow{flex:1}
+  button{font:inherit;border:1px solid var(--line);background:var(--panel2);color:var(--txt);
+    padding:8px 14px;border-radius:9px;cursor:pointer;transition:.15s}
+  button:hover{border-color:var(--acc)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#04130e;font-weight:650}
+  button.primary:hover{background:var(--accd)}
+  button.danger{color:var(--red);border-color:#3a2630}
+  button.danger:hover{border-color:var(--red)}
+  .wrap{display:grid;grid-template-columns:1fr 420px;gap:18px;padding:18px 22px;max-width:1400px;margin:0 auto}
+  @media(max-width:980px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .sec-title{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin:0 0 12px}
+  .acc{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:12px;
+    padding:13px 14px;margin-bottom:11px;background:var(--panel2)}
+  .acc.run{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+  .acc .top{display:flex;align-items:center;gap:10px}
+  .acc .name{font-weight:650;font-size:15px}
+  .acc .url{color:var(--mut);font-size:12px;word-break:break-all}
+  .badge{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--mut)}
+  .badge.ck{color:var(--amber);border-color:#3a3320}
+  .badge.st{color:var(--acc)}
+  .badge.err{color:var(--red)}
+  .meta{display:flex;gap:14px;font-size:12px;color:var(--mut);flex-wrap:wrap}
+  .meta b{color:var(--txt)}
+  .bar{height:7px;background:#0b0c10;border-radius:6px;overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--blue));transition:.2s}
+  .acts{display:flex;gap:7px;flex-wrap:wrap}
+  .acts button{padding:5px 10px;font-size:12px}
+  input,textarea{width:100%;background:#0b0c10;border:1px solid var(--line);color:var(--txt);
+    border-radius:9px;padding:9px 11px;font:inherit;margin-top:5px}
+  textarea{resize:vertical;min-height:64px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  label{display:block;margin-top:11px;font-size:12px;color:var(--mut)}
+  .log{background:#08090c;border:1px solid var(--line);border-radius:12px;padding:12px;height:340px;
+    overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.55;white-space:pre-wrap}
+  .log .l{color:#aeb4c8}
+  .log .l.err{color:var(--red)} .log .l.cmd{color:var(--blue)} .log .l.ok{color:var(--acc)}
+  .log .l.skip{color:#5b6072}
+  .empty{color:var(--mut);text-align:center;padding:26px;border:1px dashed var(--line);border-radius:12px}
+  .stat-row{display:flex;gap:18px;margin-bottom:6px;font-size:13px}
+  .stat-row .n{font-size:22px;font-weight:700;color:var(--acc)}
+  .hint{font-size:11px;color:var(--mut);margin-top:4px}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">TK</div>
+  <h1>矩阵账号视频全量备份</h1>
+  <span id="globalState" class="badge"></span>
+  <div class="grow"></div>
+  <button id="btnStartAll" class="primary">▶ 全部备份</button>
+  <button id="btnStop" class="danger" disabled>■ 停止</button>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="card">
+      <div style="display:flex;gap:16px">
+        <div class="stat-row" style="flex-direction:column;gap:0">
+          <div class="n" id="kAccounts">0</div><div style="color:var(--mut)">账号</div>
+        </div>
+        <div class="stat-row" style="flex-direction:column;gap:0">
+          <div class="n" id="kFiles">0</div><div style="color:var(--mut)">已存视频</div>
+        </div>
+        <div class="stat-row" style="flex-direction:column;gap:0">
+          <div class="n" id="kSession">0</div><div style="color:var(--mut)">本次新增</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="sec-title">账号列表</p>
+      <div id="accList"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <p class="sec-title" id="formTitle">添加账号</p>
+      <label>名称（文件夹名）</label>
+      <input id="fName" placeholder="例如 主号_搞笑">
+      <label>主页 URL / 视频链接</label>
+      <input id="fUrl" placeholder="https://www.tiktok.com/@username">
+      <label>Cookie（可选，Netscape 格式，用于私密/受限内容）</label>
+      <textarea id="fCookie" placeholder="# Netscape HTTP Cookie File ...&#10;粘贴从浏览器导出的 cookies.txt 内容"></textarea>
+      <label>额外 yt-dlp 参数（可选）</label>
+      <input id="fExtra" placeholder="例如 --datebefore 20250101  --playlist-end 50">
+      <div style="display:flex;gap:8px;margin-top:13px">
+        <button id="btnSave" class="primary" style="flex:1">保存账号</button>
+        <button id="btnCancel" style="display:none">取消编辑</button>
+      </div>
+      <p class="hint">支持账号主页（@用户名）批量抓取；增量去重已开启，重复运行只下新视频。</p>
+    </div>
+
+    <div class="card">
+      <p class="sec-title">实时日志</p>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let accounts = [];
+let editingId = null;
+let running = false;
+
+async function api(path, opt){
+  const r = await fetch('/api'+path, opt);
+  if(!r.ok){ const t = await r.text(); throw new Error(t || r.status); }
+  return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
+}
+
+function logLine(text, cls=''){
+  const el = $('#log');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const d = document.createElement('div');
+  d.className = 'l '+cls; d.textContent = text;
+  el.appendChild(d);
+  if(el.children.length > 800) el.removeChild(el.firstChild);
+  if(atBottom) el.scrollTop = el.scrollHeight;
+}
+
+const stateLabel = {queued:'排队',running:'下载中',done:'完成',error:'出错',stopped:'已停'};
+
+async function loadAccounts(){
+  accounts = await api('/accounts');
+  render();
+}
+
+function render(){
+  $('#kAccounts').textContent = accounts.length;
+  $('#kFiles').textContent = accounts.reduce((s,a)=>s+(a.files||0),0);
+  const list = $('#accList');
+  if(!accounts.length){ list.innerHTML = '<div class="empty">还没有账号，右侧添加 →</div>'; return; }
+  list.innerHTML = '';
+  for(const a of accounts){
+    const st = a._st || {};
+    const div = document.createElement('div');
+    div.className = 'acc' + (st.state==='running'?' run':'');
+    div.id = 'acc-'+a.id;
+    const pctNum = parseFloat((st.pct||'').replace('%',''))||0;
+    const itemTxt = st.total ? `第 ${st.item||0}/${st.total} 个` : '';
+    let badge = '';
+    if(st.state) badge = `<span class="badge ${st.state==='error'?'err':'st'}">${stateLabel[st.state]||st.state}</span>`;
+    div.innerHTML = `
+      <div class="top">
+        <span class="name">${esc(a.name)}</span>
+        ${a.has_cookie?'<span class="badge ck">cookie</span>':''}
+        ${badge}
+      </div>
+      <div class="url">${esc(a.url)}</div>
+      <div class="meta">
+        <span>已存 <b>${a.files||0}</b></span>
+        <span>去重库 <b>${a.archived||0}</b></span>
+        ${st.downloaded_session?`<span>本次 <b style="color:var(--acc)">+${st.downloaded_session}</b></span>`:''}
+        ${itemTxt?`<span>${itemTxt}</span>`:''}
+        ${st.speed?`<span>${esc(st.speed)} · ETA ${esc(st.eta||'')}</span>`:''}
+      </div>
+      ${st.state==='running'?`<div class="bar"><i style="width:${pctNum}%"></i></div>`:''}
+      <div class="acts">
+        <button onclick="startOne('${a.id}')" ${running?'disabled':''}>▶ 备份此号</button>
+        <button onclick="openFolder('${jsesc(a.name)}')">📁 打开目录</button>
+        <button onclick="editAcc('${a.id}')">编辑</button>
+        <button class="danger" onclick="delAcc('${a.id}')">删除</button>
+      </div>`;
+    list.appendChild(div);
+  }
+}
+
+const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const jsesc = s => (s||'').replace(/'/g,"\\'");
+
+// ---- 表单 ----
+$('#btnSave').onclick = async ()=>{
+  const body = {
+    name: $('#fName').value, url: $('#fUrl').value,
+    cookies: $('#fCookie').value, extra_args: $('#fExtra').value
+  };
+  if(!body.url.trim()){ alert('请填写 URL'); return; }
+  try{
+    if(editingId) await api('/accounts/'+editingId, {method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    else await api('/accounts', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    resetForm(); await loadAccounts();
+  }catch(e){ alert('保存失败: '+e.message); }
+};
+$('#btnCancel').onclick = resetForm;
+function resetForm(){
+  editingId=null; $('#fName').value=$('#fUrl').value=$('#fCookie').value=$('#fExtra').value='';
+  $('#formTitle').textContent='添加账号'; $('#btnSave').textContent='保存账号'; $('#btnCancel').style.display='none';
+}
+function editAcc(id){
+  const a = accounts.find(x=>x.id===id); if(!a) return;
+  editingId=id; $('#fName').value=a.name; $('#fUrl').value=a.url; $('#fExtra').value=a.extra_args||'';
+  $('#fCookie').value=''; $('#fCookie').placeholder = a.has_cookie?'（已有 cookie，留空保持不变；填内容则覆盖）':'粘贴 cookies.txt 内容';
+  $('#formTitle').textContent='编辑账号'; $('#btnSave').textContent='更新'; $('#btnCancel').style.display='block';
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+async function delAcc(id){
+  if(!confirm('删除该账号？（不会删除已下载的视频文件，会清空去重记录）')) return;
+  await api('/accounts/'+id,{method:'DELETE'}); await loadAccounts();
+}
+async function openFolder(name){ try{ await api('/open?name='+encodeURIComponent(name)); }catch(e){} }
+
+// ---- 备份控制 ----
+$('#btnStartAll').onclick = ()=>start(null);
+$('#btnStop').onclick = async ()=>{ await api('/backup/stop',{method:'POST'}); };
+async function startOne(id){ start([id]); }
+async function start(ids){
+  try{ await api('/backup/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids})}); }
+  catch(e){ alert(e.message); }
+}
+
+function setRunning(v){
+  running=v;
+  $('#btnStartAll').disabled=v; $('#btnStop').disabled=!v;
+  $('#globalState').textContent = v?'● 运行中':'○ 空闲';
+  $('#globalState').className = 'badge ' + (v?'st':'');
+}
+
+function sessionTotal(){
+  return accounts.reduce((s,a)=>s+((a._st&&a._st.downloaded_session)||0),0);
+}
+
+// ---- SSE ----
+function connect(){
+  const es = new EventSource('/api/events');
+  es.onmessage = ev=>{
+    const m = JSON.parse(ev.data);
+    handle(m);
+  };
+  es.onerror = ()=>{ /* 浏览器自动重连 */ };
+}
+
+function stOf(id){ const a=accounts.find(x=>x.id===id); if(!a) return null; return (a._st=a._st||{}); }
+
+function handle(m){
+  switch(m.type){
+    case 'state':
+      setRunning(m.running);
+      if(m.stats) for(const [id,s] of Object.entries(m.stats)){ const a=accounts.find(x=>x.id===id); if(a) a._st={...a._st,...s}; }
+      render(); break;
+    case 'run_start': setRunning(true); logLine('=== 开始备份任务 ===','ok'); break;
+    case 'run_end': setRunning(false); logLine('=== 任务结束 ===','ok'); loadAccounts(); break;
+    case 'account_start':{ const s=stOf(m.id); if(s){s.state='running';s.downloaded_session=0;} logLine('▶ 账号: '+m.name,'cmd'); render(); break; }
+    case 'account_end':{ const s=stOf(m.id); if(s){s.state=m.state;} logLine(`■ 账号结束，本次新增 ${m.downloaded} 个（${m.state}）`, m.state==='error'?'err':'ok'); $('#kFiles');  loadAccounts(); break; }
+    case 'item':{ const s=stOf(m.id); if(s){s.item=m.item;s.total=m.total;} render(); break; }
+    case 'progress':{ const s=stOf(m.id); if(s){Object.assign(s,{pct:m.pct,speed:m.speed,eta:m.eta,item:m.item,total:m.total,state:'running'});} render(); break; }
+    case 'done_one':{ const s=stOf(m.id); if(s){s.downloaded_session=m.count;} logLine('✔ '+m.title,'ok'); $('#kSession').textContent=sessionTotal(); render(); break; }
+    case 'skip': break;
+    case 'log':{
+      const cls = /ERROR|error|失败|内部错误/.test(m.line)?'err':(m.line.startsWith('$')?'cmd':'');
+      logLine(m.line, cls); break; }
+  }
+}
+
+loadAccounts().then(connect);
+</script>
+</body>
+</html>

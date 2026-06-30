@@ -1,0 +1,360 @@
+"""
+TK 矩阵账号视频全量备份工具 — 后端
+- 用子进程驱动 yt-dlp
+- SSE 实时推送进度 / 日志
+- --download-archive 实现增量去重
+"""
+import asyncio
+import json
+import os
+import re
+import shutil
+import time
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+ROOT = Path(__file__).resolve().parent.parent
+WEB = ROOT / "web"
+DATA = ROOT / "data"
+ARCHIVE_DIR = DATA / "archive"
+COOKIE_DIR = DATA / "cookies"
+DOWNLOAD_DIR = ROOT / "downloads"
+ACCOUNTS_FILE = DATA / "accounts.json"
+
+for d in (DATA, ARCHIVE_DIR, COOKIE_DIR, DOWNLOAD_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+YTDLP = shutil.which("yt-dlp") or "yt-dlp"
+
+app = FastAPI(title="TK Backup")
+
+
+# ----------------------------- 账号存储 -----------------------------
+def load_accounts() -> list[dict]:
+    if ACCOUNTS_FILE.exists():
+        return json.loads(ACCOUNTS_FILE.read_text("utf-8"))
+    return []
+
+
+def save_accounts(accounts: list[dict]) -> None:
+    ACCOUNTS_FILE.write_text(json.dumps(accounts, ensure_ascii=False, indent=2), "utf-8")
+
+
+def safe_name(s: str) -> str:
+    s = re.sub(r"[^\w\-.@]+", "_", s.strip())
+    return s.strip("_") or "account"
+
+
+# ----------------------------- 运行时状态 -----------------------------
+class Hub:
+    """SSE 广播中心 + 备份任务状态机"""
+
+    def __init__(self):
+        self.subscribers: set[asyncio.Queue] = set()
+        self.running = False
+        self.stop_flag = False
+        self.queue: list[str] = []          # 待处理账号 id
+        self.current: str | None = None     # 当前账号 id
+        self.proc: asyncio.subprocess.Process | None = None
+        self.stats: dict[str, dict] = {}    # account_id -> {downloaded, item, total, pct, state, last}
+
+    async def publish(self, event: dict):
+        event.setdefault("ts", time.time())
+        dead = []
+        for q in self.subscribers:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                dead.append(q)
+        for q in dead:
+            self.subscribers.discard(q)
+
+    def snapshot(self) -> dict:
+        return {
+            "running": self.running,
+            "current": self.current,
+            "queue": list(self.queue),
+            "stats": self.stats,
+        }
+
+
+hub = Hub()
+
+
+# ----------------------------- yt-dlp 解析 -----------------------------
+# status|id|percent|speed|eta|title
+PROG_RE = re.compile(r"^PROG\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*)$")
+ITEM_RE = re.compile(r"Downloading item (\d+) of (\d+)")
+ARCHIVED_RE = re.compile(r"has already been (recorded in the archive|downloaded)")
+
+
+def build_cmd(acc: dict) -> list[str]:
+    folder = safe_name(acc["name"])
+    out_path = DOWNLOAD_DIR / folder
+    archive = ARCHIVE_DIR / f"{acc['id']}.txt"
+    cmd = [
+        YTDLP,
+        acc["url"],
+        "--paths", str(out_path),
+        "-o", "%(id)s.%(ext)s",
+        "--download-archive", str(archive),
+        "--no-overwrites",
+        "--ignore-errors",
+        "--no-warnings",
+        "--newline",                     # 进度逐行输出，便于解析
+        "--progress-template",
+        "PROG|%(progress.status)s|%(info.id)s|%(progress._percent_str)s|"
+        "%(progress._speed_str)s|%(progress._eta_str)s|%(info.title).50s",
+    ]
+    cookie = COOKIE_DIR / f"{acc['id']}.txt"
+    if cookie.exists() and cookie.stat().st_size > 0:
+        cmd += ["--cookies", str(cookie)]
+    extra = (acc.get("extra_args") or "").strip()
+    if extra:
+        cmd += extra.split()
+    return cmd
+
+
+async def run_account(acc: dict):
+    aid = acc["id"]
+    st = hub.stats.setdefault(aid, {})
+    st.update({"state": "running", "item": 0, "total": 0, "pct": "", "last": "", "downloaded_session": 0})
+    seen_done: set[str] = set()
+    await hub.publish({"type": "account_start", "id": aid, "name": acc["name"]})
+
+    cmd = build_cmd(acc)
+    await hub.publish({"type": "log", "id": aid, "line": "$ " + " ".join(cmd)})
+
+    hub.proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+    assert hub.proc.stdout
+    async for raw in hub.proc.stdout:
+        line = raw.decode("utf-8", "replace").rstrip("\n")
+        if not line:
+            continue
+
+        m = PROG_RE.match(line)
+        if m:
+            status, vid, pct, speed, eta, title = (g.strip() for g in m.groups())
+            if status == "finished":
+                if vid and vid not in seen_done:
+                    seen_done.add(vid)
+                    st["downloaded_session"] = st.get("downloaded_session", 0) + 1
+                    st["last"] = title
+                    await hub.publish({"type": "done_one", "id": aid, "vid": vid,
+                                       "title": title or vid,
+                                       "count": st["downloaded_session"]})
+            else:
+                st.update({"pct": pct, "speed": speed, "eta": eta, "current_vid": vid})
+                await hub.publish({"type": "progress", "id": aid, "vid": vid,
+                                   "pct": pct, "speed": speed, "eta": eta,
+                                   "item": st.get("item", 0), "total": st.get("total", 0)})
+            continue
+
+        m = ITEM_RE.search(line)
+        if m:
+            st["item"], st["total"] = int(m.group(1)), int(m.group(2))
+            await hub.publish({"type": "item", "id": aid,
+                               "item": st["item"], "total": st["total"]})
+            continue
+
+        if ARCHIVED_RE.search(line):
+            await hub.publish({"type": "skip", "id": aid})
+            continue
+
+        # 其它日志（错误 / 提示）
+        await hub.publish({"type": "log", "id": aid, "line": line})
+
+    code = await hub.proc.wait()
+    hub.proc = None
+    st["state"] = "stopped" if hub.stop_flag else ("error" if code else "done")
+    await hub.publish({"type": "account_end", "id": aid, "code": code,
+                       "downloaded": st.get("downloaded_session", 0), "state": st["state"]})
+
+
+async def worker():
+    hub.running = True
+    hub.stop_flag = False
+    await hub.publish({"type": "run_start"})
+    try:
+        while hub.queue and not hub.stop_flag:
+            aid = hub.queue.pop(0)
+            acc = next((a for a in load_accounts() if a["id"] == aid), None)
+            if not acc:
+                continue
+            hub.current = aid
+            await hub.publish({"type": "state", **hub.snapshot()})
+            try:
+                await run_account(acc)
+            except Exception as e:  # noqa
+                await hub.publish({"type": "log", "id": aid, "line": f"[内部错误] {e}"})
+    finally:
+        hub.running = False
+        hub.current = None
+        await hub.publish({"type": "run_end", **hub.snapshot()})
+
+
+# ----------------------------- 数据模型 -----------------------------
+class AccountIn(BaseModel):
+    name: str
+    url: str
+    cookies: str | None = None
+    extra_args: str | None = None
+
+
+class StartIn(BaseModel):
+    ids: list[str] | None = None
+
+
+# ----------------------------- API -----------------------------
+@app.get("/api/accounts")
+def api_accounts():
+    accounts = load_accounts()
+    for a in accounts:
+        a["has_cookie"] = (COOKIE_DIR / f"{a['id']}.txt").exists()
+        a["archived"] = count_archive(a["id"])
+        a["files"] = count_files(a["name"])
+    return accounts
+
+
+def count_archive(aid: str) -> int:
+    p = ARCHIVE_DIR / f"{aid}.txt"
+    if not p.exists():
+        return 0
+    return sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
+
+
+def count_files(name: str) -> int:
+    folder = DOWNLOAD_DIR / safe_name(name)
+    if not folder.exists():
+        return 0
+    return sum(1 for f in folder.iterdir() if f.is_file() and not f.name.endswith(".part"))
+
+
+@app.post("/api/accounts")
+def api_add(acc: AccountIn):
+    if not acc.url.strip():
+        raise HTTPException(400, "URL 不能为空")
+    accounts = load_accounts()
+    aid = uuid.uuid4().hex[:8]
+    rec = {"id": aid, "name": acc.name.strip() or acc.url.strip(),
+           "url": acc.url.strip(), "extra_args": (acc.extra_args or "").strip()}
+    accounts.append(rec)
+    save_accounts(accounts)
+    if acc.cookies and acc.cookies.strip():
+        (COOKIE_DIR / f"{aid}.txt").write_text(acc.cookies, "utf-8")
+    return rec
+
+
+@app.put("/api/accounts/{aid}")
+def api_update(aid: str, acc: AccountIn):
+    accounts = load_accounts()
+    rec = next((a for a in accounts if a["id"] == aid), None)
+    if not rec:
+        raise HTTPException(404, "账号不存在")
+    rec["name"] = acc.name.strip() or rec["name"]
+    rec["url"] = acc.url.strip() or rec["url"]
+    rec["extra_args"] = (acc.extra_args or "").strip()
+    save_accounts(accounts)
+    if acc.cookies is not None:
+        cookie_path = COOKIE_DIR / f"{aid}.txt"
+        if acc.cookies.strip():
+            cookie_path.write_text(acc.cookies, "utf-8")
+        elif cookie_path.exists():
+            cookie_path.unlink()
+    return rec
+
+
+@app.delete("/api/accounts/{aid}")
+def api_delete(aid: str):
+    accounts = load_accounts()
+    accounts = [a for a in accounts if a["id"] != aid]
+    save_accounts(accounts)
+    for p in (COOKIE_DIR / f"{aid}.txt", ARCHIVE_DIR / f"{aid}.txt"):
+        if p.exists():
+            p.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/backup/start")
+async def api_start(body: StartIn):
+    if hub.running:
+        raise HTTPException(409, "已有备份任务在运行")
+    accounts = load_accounts()
+    ids = body.ids or [a["id"] for a in accounts]
+    ids = [i for i in ids if any(a["id"] == i for a in accounts)]
+    if not ids:
+        raise HTTPException(400, "没有可备份的账号")
+    hub.queue = ids
+    for i in ids:
+        hub.stats.setdefault(i, {})["state"] = "queued"
+    asyncio.create_task(worker())
+    return {"ok": True, "queued": ids}
+
+
+@app.post("/api/backup/stop")
+async def api_stop():
+    hub.stop_flag = True
+    hub.queue = []
+    if hub.proc and hub.proc.returncode is None:
+        try:
+            hub.proc.terminate()
+        except ProcessLookupError:
+            pass
+    return {"ok": True}
+
+
+@app.get("/api/state")
+def api_state():
+    return hub.snapshot()
+
+
+@app.get("/api/events")
+async def api_events(request: Request):
+    q: asyncio.Queue = asyncio.Queue(maxsize=1000)
+    hub.subscribers.add(q)
+
+    async def gen():
+        # 首包：当前快照
+        yield f"data: {json.dumps({'type': 'state', **hub.snapshot()})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    evt = await asyncio.wait_for(q.get(), timeout=15)
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            hub.subscribers.discard(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/open")
+def api_open(name: str):
+    """在 Finder 中打开账号的下载目录"""
+    folder = DOWNLOAD_DIR / safe_name(name)
+    folder.mkdir(parents=True, exist_ok=True)
+    os.system(f'open "{folder}"')
+    return {"ok": True, "path": str(folder)}
+
+
+@app.get("/")
+def index():
+    return FileResponse(WEB / "index.html")
+
+
+app.mount("/", StaticFiles(directory=WEB), name="web")
