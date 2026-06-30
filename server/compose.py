@@ -234,10 +234,12 @@ def frame_uploaded(src_path: Path) -> dict:
 
 def make_one(idx: int = 0, sources: list[str] | None = None,
              upload_sec: float | None = None, clip_sec: float | None = None,
-             layout: str = "vstack", keyframe_id: str | None = None) -> dict:
+             layout: str = "vstack", keyframe_id: str | None = None,
+             kf_opacity: float = 50) -> dict:
     upload_sec = min(max(float(upload_sec or UPLOAD_SEC), 0.5), 15)
     clip_sec = min(max(float(clip_sec or CLIP_SEC), 1), 60)
     layout = "hstack" if layout == "hstack" else "vstack"
+    op = max(0.0, min(1.0, float(kf_opacity) / 100))   # 第二幕中间图不透明度
 
     vids = library(sources)
     if not vids:
@@ -321,7 +323,9 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
               + f"concat=n={len(b_idx)}:v=1:a=0[pb]")
     fc.append(f"[pa][pb]{stackf}[stg]")
     fc.append("[stg]fade=t=in:st=0:d=0.4[stf]")
-    fc.append(f"[stf][{kf_input}:v]overlay=(W-w)/2:(H-h)/2,"
+    # 第二幕中间静止图按 op 调透明度（乘 alpha 通道）后居中叠加
+    fc.append(f"[{kf_input}:v]format=rgba,colorchannelmixer=aa={op:.3f}[kf]")
+    fc.append(f"[stf][kf]overlay=(W-w)/2:(H-h)/2,"
               f"format=yuv420p,fps={FPS}[p2]")
     fc.append(f"[0:v]format=yuv420p,setsar=1,fps={FPS}[p1]")
     fc.append("[p1][p2]concat=n=2:v=1:a=0[v]")

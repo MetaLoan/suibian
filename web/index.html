@@ -119,6 +119,13 @@
         </label>
         <span class="hint" style="margin:0">第二幕不够时长会自动接其他视频凑满</span>
       </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <label style="margin:0;display:flex;align-items:center;gap:8px">第二幕中间图不透明度
+          <input id="cOpacity" type="range" min="0" max="100" step="5" value="50" style="width:140px;margin:0">
+          <span id="cOpacityVal" style="color:var(--acc);min-width:42px">50%</span>
+        </label>
+        <span class="hint" style="margin:0">0%=进幕后中间图消失，100%=完全不透明</span>
+      </div>
 
       <div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px">
         <div id="kfPreview" style="width:60px;height:90px;border-radius:6px;background:#000 center/contain no-repeat;border:1px solid var(--line);flex-shrink:0"></div>
@@ -363,6 +370,8 @@ async function refreshGallery(){
     refreshGallery();
   });
 }
+$('#cOpacity').oninput = e => $('#cOpacityVal').textContent = e.target.value + '%';
+
 // 关键帧选择
 let kfId = null;
 function setKf(id, url, label){
@@ -405,6 +414,7 @@ $('#btnCompose').onclick = async ()=>{
     upload_sec: parseFloat($('#cUp').value)||2.5,
     clip_sec: parseFloat($('#cClip').value)||5,
     keyframe_id: kfId,
+    kf_opacity: parseFloat($('#cOpacity').value),
   };
   const btn = $('#btnCompose');
   btn.disabled = true; $('#cStatus').textContent = '生成中…';

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -238,6 +239,7 @@ class ComposeIn(BaseModel):
     clip_sec: float | None = None
     layout: str = "vstack"
     keyframe_id: str | None = None
+    kf_opacity: float = 50
 
 
 class PickIn(BaseModel):
@@ -330,15 +332,25 @@ async def api_start(body: StartIn):
     return {"ok": True, "queued": ids}
 
 
+def _kill_tree(proc):
+    """结束子进程及其所有子孙进程（Windows 下 yt-dlp.exe 会再 fork 子进程）。"""
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+        else:
+            proc.terminate()
+    except (ProcessLookupError, OSError):
+        pass
+
+
 @app.post("/api/backup/stop")
 async def api_stop():
     hub.stop_flag = True
     hub.queue = []
-    if hub.proc and hub.proc.returncode is None:
-        try:
-            hub.proc.terminate()
-        except ProcessLookupError:
-            pass
+    _kill_tree(hub.proc)
     return {"ok": True}
 
 
@@ -414,7 +426,8 @@ async def api_compose(body: ComposeIn):
         try:
             r = await asyncio.to_thread(
                 compose.make_one, i, body.sources,
-                body.upload_sec, body.clip_sec, body.layout, body.keyframe_id)
+                body.upload_sec, body.clip_sec, body.layout, body.keyframe_id,
+                body.kf_opacity)
             results.append(r)
             await hub.publish({"type": "compose_done", **r, "index": i, "total": n})
         except Exception as e:  # noqa
