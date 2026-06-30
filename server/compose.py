@@ -44,9 +44,29 @@ def load_font(size: int):
     return ImageFont.load_default()
 
 
-def library() -> list[Path]:
-    """视频库 = downloads 下所有 mp4"""
+def library(sources: list[str] | None = None) -> list[Path]:
+    """视频库 = downloads 下 mp4；sources 给定时只取这些账号文件夹"""
+    if sources:
+        files: list[Path] = []
+        for s in sources:
+            base = DOWNLOAD_DIR / s
+            if base.is_dir():
+                files += [p for p in base.rglob("*.mp4") if p.is_file()]
+        return files
     return [p for p in DOWNLOAD_DIR.rglob("*.mp4") if p.is_file()]
+
+
+def sources() -> list[dict]:
+    """downloads 下每个含视频的账号文件夹及其数量"""
+    if not DOWNLOAD_DIR.exists():
+        return []
+    out = []
+    for d in sorted(DOWNLOAD_DIR.iterdir()):
+        if d.is_dir():
+            c = sum(1 for _ in d.rglob("*.mp4"))
+            if c:
+                out.append({"name": d.name, "count": c})
+    return out
 
 
 def duration(path: Path) -> float:
@@ -162,10 +182,10 @@ def pick_clips(vids: list[Path], n: int = 2) -> list[tuple[Path, float]]:
     return chosen[:n]
 
 
-def make_one(idx: int = 0) -> dict:
-    vids = library()
+def make_one(idx: int = 0, sources: list[str] | None = None) -> dict:
+    vids = library(sources)
     if not vids:
-        raise RuntimeError("视频库为空，请先备份一些视频")
+        raise RuntimeError("该账号下没有视频，请先备份或换个账号")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     TMP.mkdir(parents=True, exist_ok=True)
     stamp = f"{int(time.time() * 1000)}_{idx}"

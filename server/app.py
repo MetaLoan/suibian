@@ -220,6 +220,7 @@ class StartIn(BaseModel):
 
 class ComposeIn(BaseModel):
     count: int = 1
+    sources: list[str] | None = None
 
 
 # ----------------------------- API -----------------------------
@@ -361,9 +362,14 @@ def api_open(name: str):
 
 # ----------------------------- 二次创作 -----------------------------
 @app.get("/api/library")
-def api_library():
-    vids = compose.library()
-    return {"count": len(vids)}
+def api_library(source: str | None = None):
+    srcs = [source] if source else None
+    return {"count": len(compose.library(srcs))}
+
+
+@app.get("/api/sources")
+def api_sources():
+    return compose.sources()
 
 
 @app.get("/api/outputs")
@@ -373,14 +379,14 @@ def api_outputs():
 
 @app.post("/api/compose")
 async def api_compose(body: ComposeIn):
-    if not compose.library():
-        raise HTTPException(400, "视频库为空，请先备份一些视频")
+    if not compose.library(body.sources):
+        raise HTTPException(400, "该账号下没有视频，请先备份或换个取材范围")
     n = max(1, min(body.count, 20))
     results = []
     await hub.publish({"type": "compose_start", "count": n})
     for i in range(n):
         try:
-            r = await asyncio.to_thread(compose.make_one, i)
+            r = await asyncio.to_thread(compose.make_one, i, body.sources)
             results.append(r)
             await hub.publish({"type": "compose_done", **r, "index": i, "total": n})
         except Exception as e:  # noqa

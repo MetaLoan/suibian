@@ -97,7 +97,9 @@
     <div class="card">
       <p class="sec-title">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（第一幕上传进度 → 第二幕上下两段视频淡入）</span></p>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span class="badge">视频库 <b id="libCount" style="color:var(--acc)">0</b> 条</span>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">取材账号
+          <select id="cSource" style="margin:0;width:auto;min-width:150px"></select>
+        </label>
         <label style="margin:0;display:flex;align-items:center;gap:6px">数量
           <input id="cCount" type="number" min="1" max="20" value="3" style="width:64px;margin:0">
         </label>
@@ -293,7 +295,15 @@ function handle(m){
 
 // ---- 二次创作 ----
 async function refreshLib(){
-  try{ const r = await api('/library'); $('#libCount').textContent = r.count; }catch(e){}
+  let srcs = [];
+  try{ srcs = await api('/sources'); }catch(e){ return; }
+  const sel = $('#cSource');
+  const prev = sel.value;
+  const total = srcs.reduce((s,x)=>s+x.count,0);
+  let html = `<option value="">全部账号 (${total})</option>`;
+  for(const s of srcs) html += `<option value="${esc(s.name)}">${esc(s.name)} (${s.count})</option>`;
+  sel.innerHTML = html;
+  if([...sel.options].some(o=>o.value===prev)) sel.value = prev;
 }
 async function refreshGallery(){
   let outs = [];
@@ -321,11 +331,13 @@ async function refreshGallery(){
 }
 $('#btnCompose').onclick = async ()=>{
   const n = Math.max(1, Math.min(20, parseInt($('#cCount').value)||1));
+  const src = $('#cSource').value;
+  const sources = src ? [src] : null;
   const btn = $('#btnCompose');
   btn.disabled = true; $('#cStatus').textContent = '生成中…';
-  logLine(`🎬 开始生成 ${n} 个合成视频…`, 'cmd');
+  logLine(`🎬 开始生成 ${n} 个合成视频（取材：${src||'全部账号'}）…`, 'cmd');
   try{
-    const r = await api('/compose', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({count:n})});
+    const r = await api('/compose', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({count:n, sources})});
     $('#cStatus').textContent = `完成 ${r.results.length} 个`;
     await refreshGallery();
   }catch(e){ $('#cStatus').textContent=''; alert('生成失败: '+e.message); }
