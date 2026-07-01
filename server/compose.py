@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from PIL import Image, ImageOps, ImageFilter, ImageDraw, ImageFont
+from PIL import Image, ImageOps, ImageFilter, ImageDraw, ImageFont, ImageEnhance
 
 from server.runtime import app_dir, bin_path
 
@@ -27,20 +27,38 @@ W, H = 1080, 1920
 HALF = H // 2          # 960，上下各一半
 CLIP_SEC = 5           # 第二幕默认时长
 UPLOAD_SEC = 2.5       # 第一幕默认「上传」时长
+TRANSITION = 0.5       # 两幕之间中间图缩放+淡入过渡时长
 FPS = 30
-KF_INNER_W = 288       # 关键帧内容宽度，+ 边框 6*2 = 300
+
+# 描边图（基础分辨率取大些，方便缩放到任意尺寸仍清晰）
+KF_INNER_W = 480
+KF_BORDER = 6
+KF_SHADOW_BLUR = 14
+KF_SHADOW_OFFSET = 10
+KF_SHADOW_ALPHA = 150
+KF_MARGIN = KF_SHADOW_BLUR * 2 + KF_SHADOW_OFFSET   # 描边图四周留白(投影)
+DEFAULT_KF_W = 300     # 中间图默认显示宽度(白框外沿)
+
+# 第一幕默认文案
+CAP_PREFIX = "When I Upload My Girl On "
+CAP_HIGHLIGHT = "@OKBOX"
+GEN_LABEL = "AI Generating"
 
 
 def _new_id() -> str:
     return f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
 
+# 优先中英兼容字体（含 CJK），保证中文文案也能渲染
 _FONT_CANDIDATES = [
+    "/System/Library/Fonts/PingFang.ttc",                    # 新版 macOS
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",  # macOS 中英全
+    "/System/Library/Fonts/STHeiti Medium.ttc",              # macOS 黑体
+    "C:/Windows/Fonts/msyhbd.ttc",                           # Windows 微软雅黑 粗
+    "C:/Windows/Fonts/msyh.ttc",                             # 微软雅黑
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
-    "/System/Library/Fonts/SFNS.ttf",
-    "C:/Windows/Fonts/arialbd.ttf",          # Windows 加粗
+    "C:/Windows/Fonts/arialbd.ttf",
     "C:/Windows/Fonts/arial.ttf",
-    "C:/Windows/Fonts/segoeui.ttf",
 ]
 
 
@@ -101,38 +119,48 @@ def has_audio(path: Path) -> bool:
 
 
 def render_upload_frames(framed_path: Path, out_dir: Path,
-                         upload_sec: float = UPLOAD_SEC) -> int:
-    """第一幕：黑底 + 居中关键帧 + 0→100% 进度条，逐帧渲染。返回帧数。"""
+                         upload_sec: float = UPLOAD_SEC,
+                         kf_w: float = DEFAULT_KF_W,
+                         bg: Image.Image | None = None,
+                         cap_a: str = CAP_PREFIX, cap_b: str = CAP_HIGHLIGHT,
+                         gen_label: str = GEN_LABEL) -> int:
+    """第一幕：背景(黑底或随机帧) + 居中关键帧(尺寸 kf_w) + 0→100% 进度条。
+    文案 cap_a/cap_b(高亮)/gen_label 均可自定义。返回帧数。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     kf = Image.open(framed_path).convert("RGBA")
     fw, fh = kf.size
-    cx, cy = W // 2, H // 2
-    fx, fy = cx - fw // 2, cy - fh // 2
+    box_w = fw - 2 * KF_MARGIN                 # 白框外沿宽
+    factor = max(0.05, float(kf_w) / box_w)
+    sw, sh = max(1, round(fw * factor)), max(1, round(fh * factor))
+    kf = kf.resize((sw, sh))
 
+    cx, cy = W // 2, H // 2
+    fx, fy = cx - sw // 2, cy - sh // 2
     bar_w, bar_h = 460, 16
-    bx, by = (W - bar_w) // 2, cy + fh // 2 + 64
+    bx, by = (W - bar_w) // 2, cy + sh // 2 + 64
     font = load_font(46)
     cap_font = load_font(42)
-
-    # 顶部 meme 标题（静态），@OKBOX 用绿色高亮
-    cap_a, cap_b = "When I Upload My Girl On ", "@OKBOX"
     cy_cap = fy - 96
 
+    base = bg.convert("RGB") if bg is not None else Image.new("RGB", (W, H), (8, 9, 13))
     n = max(1, int(round(FPS * upload_sec)))
     for i in range(n):
         prog = min(1.0, (i + 1) / n)
         pct = int(round(prog * 100))
-        canvas = Image.new("RGB", (W, H), (8, 9, 13))
+        canvas = base.copy()
         canvas.paste(kf, (fx, fy), kf)
         d = ImageDraw.Draw(canvas)
 
-        wa = d.textlength(cap_a, font=cap_font)
-        wb = d.textlength(cap_b, font=cap_font)
-        sx = cx - (wa + wb) / 2
-        d.text((sx, cy_cap), cap_a, font=cap_font, fill=(255, 255, 255))
-        d.text((sx + wa, cy_cap), cap_b, font=cap_font, fill=(25, 211, 162))
+        if cap_a or cap_b:
+            wa = d.textlength(cap_a, font=cap_font) if cap_a else 0
+            wb = d.textlength(cap_b, font=cap_font) if cap_b else 0
+            sx = cx - (wa + wb) / 2
+            if cap_a:
+                d.text((sx, cy_cap), cap_a, font=cap_font, fill=(255, 255, 255))
+            if cap_b:
+                d.text((sx + wa, cy_cap), cap_b, font=cap_font, fill=(25, 211, 162))
 
-        label = f"AI Generating  {pct}%"
+        label = f"{gen_label}  {pct}%" if gen_label else f"{pct}%"
         tw = d.textlength(label, font=font)
         d.text((cx - tw / 2, by - 70), label, font=font, fill=(255, 255, 255))
 
@@ -146,30 +174,49 @@ def render_upload_frames(framed_path: Path, out_dir: Path,
     return n
 
 
-def frame_image(src: Path, dst: Path,
-                inner_w: int = KF_INNER_W, border: int = 6,
-                shadow_blur: int = 14, shadow_offset: int = 10,
-                shadow_alpha: int = 150) -> None:
-    """给关键帧加白色细边 + 投影，输出居中可叠加的 RGBA PNG"""
+def frame_image(src: Path, dst: Path, inner_w: int = KF_INNER_W) -> None:
+    """给关键帧加白色细边 + 投影，输出居中可叠加的 RGBA PNG。
+    白框外沿宽 = inner_w + 2*KF_BORDER；整图四周各留 KF_MARGIN 给投影。"""
     im = Image.open(src).convert("RGB")
     w, h = im.size
     inner_h = max(1, round(h * inner_w / w))
     im = im.resize((inner_w, inner_h))
-    framed = ImageOps.expand(im, border=border, fill="white").convert("RGBA")
+    framed = ImageOps.expand(im, border=KF_BORDER, fill="white").convert("RGBA")
     fw, fh = framed.size
 
-    margin = shadow_blur * 2 + shadow_offset
-    canvas = Image.new("RGBA", (fw + 2 * margin, fh + 2 * margin), (0, 0, 0, 0))
-
+    m = KF_MARGIN
+    canvas = Image.new("RGBA", (fw + 2 * m, fh + 2 * m), (0, 0, 0, 0))
     shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    rect = Image.new("RGBA", (fw, fh), (0, 0, 0, shadow_alpha))
-    shadow.paste(rect, (margin + shadow_offset, margin + shadow_offset))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(shadow_blur))
+    rect = Image.new("RGBA", (fw, fh), (0, 0, 0, KF_SHADOW_ALPHA))
+    shadow.paste(rect, (m + KF_SHADOW_OFFSET, m + KF_SHADOW_OFFSET))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(KF_SHADOW_BLUR))
     canvas = Image.alpha_composite(canvas, shadow)
-
-    # 画框居中贴在画布中心 → 叠加时即以画框为中心
-    canvas.alpha_composite(framed, (margin, margin))
+    canvas.alpha_composite(framed, (m, m))
     canvas.save(dst)
+
+
+def _rand_ts(dur: float) -> float:
+    """视频内随机位置（避开最末尾）。"""
+    if dur <= 0.2:
+        return 0.0
+    return random.uniform(0, max(0.0, dur - 0.1))
+
+
+def _extract_frame(video: Path, ts: float, dst: Path) -> bool:
+    subprocess.run(
+        [FFMPEG, "-y", "-ss", f"{ts:.2f}", "-i", str(video),
+         "-frames:v", "1", "-q:v", "2", str(dst)],
+        capture_output=True, text=True,
+    )
+    return dst.exists() and dst.stat().st_size > 0
+
+
+def _bg_from_frame(src_img: Path) -> Image.Image:
+    """把一帧做成第一幕背景：铺满画布 + 高斯模糊 + 压暗。"""
+    im = Image.open(src_img).convert("RGB")
+    im = ImageOps.fit(im, (W, H), method=Image.LANCZOS)
+    im = im.filter(ImageFilter.GaussianBlur(26))
+    return ImageEnhance.Brightness(im).enhance(0.32)
 
 
 def build_segments(vids: list[Path], target: float,
@@ -202,22 +249,16 @@ def build_segments(vids: list[Path], target: float,
 
 
 def pick_keyframe(sources: list[str] | None = None) -> dict:
-    """随机抽一帧（随机视频 ~50% 处），描边存为预览，返回 id 供合成使用。"""
+    """随机抽一帧（随机视频 + 视频内随机位置），描边存为预览，返回 id。"""
     vids = library(sources)
     if not vids:
         raise RuntimeError("没有可取材的视频")
     KEYFRAME_DIR.mkdir(parents=True, exist_ok=True)
     kf_src = random.choice(vids)
-    kdur = duration(kf_src)
-    ts = kdur * 0.5 if kdur > 0 else 0
+    ts = _rand_ts(duration(kf_src))
     kid = _new_id()
     raw = KEYFRAME_DIR / f"raw_{kid}.jpg"
-    subprocess.run(
-        [FFMPEG, "-y", "-ss", f"{ts:.2f}", "-i", str(kf_src),
-         "-frames:v", "1", "-q:v", "2", str(raw)],
-        capture_output=True, text=True,
-    )
-    if not raw.exists():
+    if not _extract_frame(kf_src, ts, raw):
         raise RuntimeError("抽帧失败")
     frame_image(raw, KEYFRAME_DIR / f"{kid}.png")
     raw.unlink(missing_ok=True)
@@ -235,11 +276,20 @@ def frame_uploaded(src_path: Path) -> dict:
 def make_one(idx: int = 0, sources: list[str] | None = None,
              upload_sec: float | None = None, clip_sec: float | None = None,
              layout: str = "vstack", keyframe_id: str | None = None,
-             kf_opacity: float = 50) -> dict:
+             kf_opacity: float = 50,
+             kf_w1: float = DEFAULT_KF_W, kf_w2: float = DEFAULT_KF_W,
+             bg_mode: str = "black",
+             cap_prefix: str | None = None, cap_highlight: str | None = None,
+             gen_label: str | None = None) -> dict:
     upload_sec = min(max(float(upload_sec or UPLOAD_SEC), 0.5), 15)
     clip_sec = min(max(float(clip_sec or CLIP_SEC), 1), 60)
     layout = "hstack" if layout == "hstack" else "vstack"
     op = max(0.0, min(1.0, float(kf_opacity) / 100))   # 第二幕中间图不透明度
+    kf_w1 = min(max(float(kf_w1), 60), 1000)
+    kf_w2 = min(max(float(kf_w2), 60), 1000)
+    cap_a = CAP_PREFIX if cap_prefix is None else cap_prefix
+    cap_b = CAP_HIGHLIGHT if cap_highlight is None else cap_highlight
+    glabel = GEN_LABEL if gen_label is None else gen_label
 
     vids = library(sources)
     if not vids:
@@ -249,7 +299,7 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     stamp = f"{int(time.time() * 1000)}_{idx}"
     dur_cache: dict = {}
 
-    # 1) 关键帧：自定义（抽取/上传）或随机
+    # 1) 关键帧：自定义（抽取/上传）或随机（随机视频 + 视频内随机位置）
     raw_kf = None
     if keyframe_id:
         framed = KEYFRAME_DIR / f"{keyframe_id}.png"
@@ -259,24 +309,27 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
         cleanup_framed = False
     else:
         kf_src = random.choice(vids)
-        kdur = duration(kf_src)
-        ts = kdur * 0.5 if kdur > 0 else 0
         raw_kf = TMP / f"kf_{stamp}.jpg"
-        r = subprocess.run(
-            [FFMPEG, "-y", "-ss", f"{ts:.2f}", "-i", str(kf_src),
-             "-frames:v", "1", "-q:v", "2", str(raw_kf)],
-            capture_output=True, text=True,
-        )
-        if not raw_kf.exists():
-            raise RuntimeError("抽帧失败: " + r.stderr[-300:])
+        if not _extract_frame(kf_src, _rand_ts(duration(kf_src)), raw_kf):
+            raise RuntimeError("抽帧失败")
         framed = TMP / f"frame_{stamp}.png"
         frame_image(raw_kf, framed)
         kf_from = kf_src.parent.name + "/" + kf_src.name
         cleanup_framed = True
 
+    # 可选：第一幕背景用随机帧（随机视频 + 随机位置，模糊压暗）
+    bg_img = None
+    raw_bg = None
+    if bg_mode == "frame":
+        bg_src = random.choice(vids)
+        raw_bg = TMP / f"bg_{stamp}.jpg"
+        if _extract_frame(bg_src, _rand_ts(duration(bg_src)), raw_bg):
+            bg_img = _bg_from_frame(raw_bg)
+
     # 第一幕：上传进度（PIL 逐帧 → 视频）
     p1dir = TMP / f"p1_{stamp}"
-    render_upload_frames(framed, p1dir, upload_sec)
+    render_upload_frames(framed, p1dir, upload_sec, kf_w=kf_w1, bg=bg_img,
+                         cap_a=cap_a, cap_b=cap_b, gen_label=glabel)
     phase1 = TMP / f"phase1_{stamp}.mp4"
     r = subprocess.run(
         [FFMPEG, "-y", "-framerate", str(FPS), "-i", str(p1dir / "f_%04d.png"),
@@ -322,10 +375,25 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     fc.append("".join(f"[b{k}]" for k in range(len(b_idx)))
               + f"concat=n={len(b_idx)}:v=1:a=0[pb]")
     fc.append(f"[pa][pb]{stackf}[stg]")
-    fc.append("[stg]fade=t=in:st=0:d=0.4[stf]")
-    # 第二幕中间静止图按 op 调透明度（乘 alpha 通道）后居中叠加
-    fc.append(f"[{kf_input}:v]format=rgba,colorchannelmixer=aa={op:.3f}[kf]")
-    fc.append(f"[stf][kf]overlay=(W-w)/2:(H-h)/2,"
+    fc.append(f"[stg]fade=t=in:st=0:d={TRANSITION}[stf]")
+
+    # 中间图缩放+淡入过渡：0~TRANSITION 秒内 尺寸 kf_w1→kf_w2、透明度 1→op
+    img = Image.open(framed)
+    png_w, png_h = img.size
+    img.close()
+    box_w = png_w - 2 * KF_MARGIN
+    kr = png_w / box_w                     # 整图宽 / 白框外沿宽
+    w1, w2 = kf_w1 * kr, kf_w2 * kr        # 对应整图目标宽度
+    tf = TRANSITION * FPS                   # 过渡帧数
+    ew = f"if(lt(n,{tf:.0f}),{w1:.1f}+({(w2 - w1):.1f})*n/{tf:.0f},{w2:.1f})"
+    eh = f"({ew})*{png_h}/{png_w}"
+    ae = f"if(lt(T,{TRANSITION}),1+({(op - 1):.4f})*T/{TRANSITION},{op:.4f})"
+    fc.append(
+        f"[{kf_input}:v]format=rgba,scale=w='{ew}':h='{eh}':eval=frame,"
+        f"format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+        f"a='alpha(X,Y)*({ae})'[kf]"
+    )
+    fc.append(f"[stf][kf]overlay=x='(W-w)/2':y='(H-h)/2':eval=frame,"
               f"format=yuv420p,fps={FPS}[p2]")
     fc.append(f"[0:v]format=yuv420p,setsar=1,fps={FPS}[p1]")
     fc.append("[p1][p2]concat=n=2:v=1:a=0[v]")
@@ -357,6 +425,8 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     # 清理临时文件（自定义关键帧保留，供批量复用）
     if raw_kf:
         raw_kf.unlink(missing_ok=True)
+    if raw_bg:
+        raw_bg.unlink(missing_ok=True)
     if cleanup_framed:
         framed.unlink(missing_ok=True)
     phase1.unlink(missing_ok=True)

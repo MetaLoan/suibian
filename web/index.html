@@ -126,6 +126,35 @@
         </label>
         <span class="hint" style="margin:0">0%=进幕后中间图消失，100%=完全不透明</span>
       </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px">
+        <label style="margin:0;display:flex;align-items:center;gap:6px">第一幕图大小
+          <input id="cW1" type="number" min="60" max="1000" step="10" value="300" style="width:74px;margin:0">px
+        </label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">第二幕图大小
+          <input id="cW2" type="number" min="60" max="1000" step="10" value="300" style="width:74px;margin:0">px
+        </label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">第一幕背景
+          <select id="cBg" style="margin:0;width:auto">
+            <option value="black">黑底</option>
+            <option value="frame">随机帧(模糊)</option>
+          </select>
+        </label>
+        <span class="hint" style="margin:0">两幕图之间自动缩放+淡入过渡(0.5s)</span>
+      </div>
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:13px;color:var(--mut)">第一幕文案（点击展开编辑）</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <label style="margin:0;font-size:12px;color:var(--mut)">标题（普通白字部分）
+            <input id="cCapPrefix" value="When I Upload My Girl On " style="margin-top:4px">
+          </label>
+          <label style="margin:0;font-size:12px;color:var(--mut)">标题高亮（绿色部分，紧接标题后）
+            <input id="cCapHi" value="@OKBOX" style="margin-top:4px">
+          </label>
+          <label style="margin:0;font-size:12px;color:var(--mut)">进度文案（后面自动跟百分比）
+            <input id="cGenLabel" value="AI Generating" style="margin-top:4px">
+          </label>
+        </div>
+      </details>
 
       <div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px">
         <div id="kfPreview" style="width:60px;height:90px;border-radius:6px;background:#000 center/contain no-repeat;border:1px solid var(--line);flex-shrink:0"></div>
@@ -415,6 +444,12 @@ $('#btnCompose').onclick = async ()=>{
     clip_sec: parseFloat($('#cClip').value)||5,
     keyframe_id: kfId,
     kf_opacity: parseFloat($('#cOpacity').value),
+    kf_w1: parseFloat($('#cW1').value)||300,
+    kf_w2: parseFloat($('#cW2').value)||300,
+    bg_mode: $('#cBg').value,
+    cap_prefix: $('#cCapPrefix').value,
+    cap_highlight: $('#cCapHi').value,
+    gen_label: $('#cGenLabel').value,
   };
   const btn = $('#btnCompose');
   btn.disabled = true; $('#cStatus').textContent = '生成中…';

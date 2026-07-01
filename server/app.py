@@ -240,6 +240,12 @@ class ComposeIn(BaseModel):
     layout: str = "vstack"
     keyframe_id: str | None = None
     kf_opacity: float = 50
+    kf_w1: float = 300
+    kf_w2: float = 300
+    bg_mode: str = "black"
+    cap_prefix: str | None = None
+    cap_highlight: str | None = None
+    gen_label: str | None = None
 
 
 class PickIn(BaseModel):
@@ -427,7 +433,10 @@ async def api_compose(body: ComposeIn):
             r = await asyncio.to_thread(
                 compose.make_one, i, body.sources,
                 body.upload_sec, body.clip_sec, body.layout, body.keyframe_id,
-                body.kf_opacity)
+                body.kf_opacity,
+                kf_w1=body.kf_w1, kf_w2=body.kf_w2, bg_mode=body.bg_mode,
+                cap_prefix=body.cap_prefix, cap_highlight=body.cap_highlight,
+                gen_label=body.gen_label)
             results.append(r)
             await hub.publish({"type": "compose_done", **r, "index": i, "total": n})
         except Exception as e:  # noqa
