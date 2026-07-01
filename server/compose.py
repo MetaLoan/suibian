@@ -403,7 +403,8 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
         cmd += ["-ss", f"{s:.2f}", "-t", f"{t:.2f}", "-i", str(v)]
         b_idx.append(i); i += 1
     kf_input = i
-    cmd += ["-loop", "1", "-t", f"{clip_sec:.2f}", "-i", str(framed)]; i += 1
+    cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{clip_sec:.2f}",
+            "-i", str(framed)]; i += 1
 
     # 两个画面各自缩放→拼接成 clip_sec 长
     for k, j in enumerate(a_idx):
@@ -425,8 +426,8 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     box_w = png_w - 2 * KF_MARGIN
     kr = png_w / box_w                     # 整图宽 / 白框外沿宽
     w1, w2 = kf_w1 * kr, kf_w2 * kr        # 对应整图目标宽度
-    tf = TRANSITION * FPS                   # 过渡帧数
-    ew = f"if(lt(n,{tf:.0f}),{w1:.1f}+({(w2 - w1):.1f})*n/{tf:.0f},{w2:.1f})"
+    # 用时间戳 t 驱动（不依赖帧计数 n，避免多输入/音频调度下动画卡住）
+    ew = f"if(lt(t,{TRANSITION}),{w1:.1f}+({(w2 - w1):.1f})*t/{TRANSITION},{w2:.1f})"
     eh = f"({ew})*{png_h}/{png_w}"
     ae = f"if(lt(T,{TRANSITION}),1+({(op - 1):.4f})*T/{TRANSITION},{op:.4f})"
     fc.append(
