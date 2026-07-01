@@ -240,8 +240,8 @@ class ComposeIn(BaseModel):
     layout: str = "vstack"
     keyframe_id: str | None = None
     kf_opacity: float = 50
-    kf_w1: float = 300
-    kf_w2: float = 300
+    kf_w1: float = 28          # 中间图宽度占输出宽度的百分比
+    kf_w2: float = 28
     bg_mode: str = "black"
     cap_prefix: str | None = None
     cap_highlight: str | None = None

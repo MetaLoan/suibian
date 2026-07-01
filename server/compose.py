@@ -311,8 +311,9 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     clip_sec = min(max(float(clip_sec or CLIP_SEC), 1), 60)
     layout = "hstack" if layout == "hstack" else "vstack"
     op = max(0.0, min(1.0, float(kf_opacity) / 100))   # 第二幕中间图不透明度
-    kf_w1 = min(max(float(kf_w1), 60), 4000)
-    kf_w2 = min(max(float(kf_w2), 60), 4000)
+    # kf_w1/kf_w2 为「占输出宽度的百分比」，分辨率无关
+    kf_w1_pct = min(max(float(kf_w1), 3), 100)
+    kf_w2_pct = min(max(float(kf_w2), 3), 100)
     cap_a = CAP_PREFIX if cap_prefix is None else cap_prefix
     cap_b = CAP_HIGHLIGHT if cap_highlight is None else cap_highlight
     glabel = GEN_LABEL if gen_label is None else gen_label
@@ -321,6 +322,8 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     ch = max(64, min(int(out_h), 4096)) & ~1
     half = ch // 2
     kf_radius = max(0.0, min(50.0, float(kf_radius)))
+    kf_w1 = kf_w1_pct / 100 * cw          # 换算成像素
+    kf_w2 = kf_w2_pct / 100 * cw
 
     vids = library(sources)
     if not vids:

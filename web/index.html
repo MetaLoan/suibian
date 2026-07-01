@@ -128,10 +128,10 @@
       </div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px">
         <label style="margin:0;display:flex;align-items:center;gap:6px">第一幕图大小
-          <input id="cW1" type="number" min="60" max="1000" step="10" value="300" style="width:74px;margin:0">px
+          <input id="cW1" type="number" min="3" max="100" step="1" value="28" style="width:64px;margin:0">%
         </label>
         <label style="margin:0;display:flex;align-items:center;gap:6px">第二幕图大小
-          <input id="cW2" type="number" min="60" max="1000" step="10" value="300" style="width:74px;margin:0">px
+          <input id="cW2" type="number" min="3" max="100" step="1" value="28" style="width:64px;margin:0">%
         </label>
         <label style="margin:0;display:flex;align-items:center;gap:6px">第一幕背景
           <select id="cBg" style="margin:0;width:auto">
@@ -467,8 +467,8 @@ $('#btnCompose').onclick = async ()=>{
     clip_sec: parseFloat($('#cClip').value)||5,
     keyframe_id: kfId,
     kf_opacity: parseFloat($('#cOpacity').value),
-    kf_w1: parseFloat($('#cW1').value)||300,
-    kf_w2: parseFloat($('#cW2').value)||300,
+    kf_w1: parseFloat($('#cW1').value)||28,
+    kf_w2: parseFloat($('#cW2').value)||28,
     bg_mode: $('#cBg').value,
     cap_prefix: $('#cCapPrefix').value,
     cap_highlight: $('#cCapHi').value,
