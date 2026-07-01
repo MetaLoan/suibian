@@ -420,6 +420,25 @@ def api_sources():
     return compose.sources()
 
 
+DEFAULTS_FILE = DATA / "compose_defaults.json"
+
+
+@app.get("/api/compose/defaults")
+def api_get_defaults():
+    if DEFAULTS_FILE.exists():
+        try:
+            return json.loads(DEFAULTS_FILE.read_text("utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+@app.post("/api/compose/defaults")
+async def api_set_defaults(body: dict):
+    DEFAULTS_FILE.write_text(json.dumps(body, ensure_ascii=False, indent=2), "utf-8")
+    return {"ok": True}
+
+
 @app.get("/api/outputs")
 def api_outputs():
     return compose.list_outputs()

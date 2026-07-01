@@ -95,7 +95,11 @@
     </div>
 
     <div class="card">
-      <p class="sec-title">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（第一幕上传进度 → 第二幕上下两段视频淡入）</span></p>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <p class="sec-title" style="margin:0">🎬 二次创作 <span style="text-transform:none;color:var(--mut)">（第一幕上传进度 → 第二幕上下两段视频淡入）</span></p>
+        <div style="flex:1"></div>
+        <button id="btnSaveDefaults" style="padding:5px 12px;font-size:12px">⭐ 设为默认配置</button>
+      </div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <label style="margin:0;display:flex;align-items:center;gap:6px">取材账号
           <select id="cSource" style="margin:0;width:auto;min-width:140px"></select>
@@ -418,6 +422,31 @@ async function refreshGallery(){
 }
 $('#cOpacity').oninput = e => $('#cOpacityVal').textContent = e.target.value + '%';
 $('#cRadius').oninput = e => $('#cRadiusVal').textContent = e.target.value + '%';
+
+// 默认配置：保存/载入当前二次创作参数
+const DEFAULT_FIELDS = ['cSource','cLayout','cCount','cUp','cClip','cOpacity',
+  'cW1','cW2','cBg','cResW','cResH','cRadius','cCapPrefix','cCapHi','cGenLabel'];
+$('#btnSaveDefaults').onclick = async ()=>{
+  const cfg = {};
+  DEFAULT_FIELDS.forEach(id=>{ const el=$('#'+id); if(el) cfg[id]=el.value; });
+  const btn = $('#btnSaveDefaults'), old = btn.textContent;
+  try{
+    await api('/compose/defaults',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(cfg)});
+    btn.textContent = '✓ 已保存为默认';
+    setTimeout(()=>{ btn.textContent = old; }, 1600);
+  }catch(e){ alert('保存失败: '+e.message); }
+};
+async function applyDefaults(){
+  let cfg; try{ cfg = await api('/compose/defaults'); }catch(e){ return; }
+  if(!cfg || !Object.keys(cfg).length) return;
+  DEFAULT_FIELDS.forEach(id=>{
+    const el=$('#'+id); if(!el || cfg[id]==null) return;
+    if(id==='cSource'){ if([...el.options].some(o=>o.value===cfg[id])) el.value=cfg[id]; }
+    else el.value = cfg[id];
+  });
+  $('#cOpacityVal').textContent = $('#cOpacity').value + '%';
+  $('#cRadiusVal').textContent = $('#cRadius').value + '%';
+}
 $('#cResPreset').onchange = e => {
   const v = e.target.value; if(!v) return;
   const [w,h] = v.split('x');
@@ -488,7 +517,7 @@ $('#btnCompose').onclick = async ()=>{
   finally{ btn.disabled = false; }
 };
 
-loadAccounts().then(()=>{ connect(); refreshLib(); refreshGallery(); });
+loadAccounts().then(async ()=>{ connect(); await refreshLib(); await applyDefaults(); refreshGallery(); });
 </script>
 </body>
 </html>
