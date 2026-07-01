@@ -430,10 +430,12 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     ew = f"if(lt(t,{TRANSITION}),{w1:.1f}+({(w2 - w1):.1f})*t/{TRANSITION},{w2:.1f})"
     eh = f"({ew})*{png_h}/{png_w}"
     ae = f"if(lt(T,{TRANSITION}),1+({(op - 1):.4f})*T/{TRANSITION},{op:.4f})"
+    # scale 必须是链中最后一个滤镜：其后再接任何滤镜(format/geq)会导致
+    # eval=frame 的逐帧 t 计算失效、动画卡在首值。故先 geq(时间透明度)再 scale。
     fc.append(
-        f"[{kf_input}:v]format=rgba,scale=w='{ew}':h='{eh}':eval=frame,"
-        f"format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-        f"a='alpha(X,Y)*({ae})'[kf]"
+        f"[{kf_input}:v]format=rgba,"
+        f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({ae})',"
+        f"scale=w='{ew}':h='{eh}':eval=frame[kf]"
     )
     fc.append(f"[stf][kf]overlay=x='(W-w)/2':y='(H-h)/2':eval=frame,"
               f"format=yuv420p,fps={FPS}[p2]")
