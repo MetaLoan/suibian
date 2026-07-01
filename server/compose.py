@@ -123,9 +123,10 @@ def render_upload_frames(framed_path: Path, out_dir: Path,
                          kf_w: float = DEFAULT_KF_W,
                          bg: Image.Image | None = None,
                          cap_a: str = CAP_PREFIX, cap_b: str = CAP_HIGHLIGHT,
-                         gen_label: str = GEN_LABEL) -> int:
+                         gen_label: str = GEN_LABEL,
+                         cw: int = W, ch: int = H) -> int:
     """第一幕：背景(黑底或随机帧) + 居中关键帧(尺寸 kf_w) + 0→100% 进度条。
-    文案 cap_a/cap_b(高亮)/gen_label 均可自定义。返回帧数。"""
+    文案 cap_a/cap_b(高亮)/gen_label 均可自定义；画布 cw×ch。返回帧数。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     kf = Image.open(framed_path).convert("RGBA")
     fw, fh = kf.size
@@ -134,15 +135,16 @@ def render_upload_frames(framed_path: Path, out_dir: Path,
     sw, sh = max(1, round(fw * factor)), max(1, round(fh * factor))
     kf = kf.resize((sw, sh))
 
-    cx, cy = W // 2, H // 2
+    s = min(cw, ch) / 1080.0                    # 相对 1080 基准缩放 UI 元素
+    cx, cy = cw // 2, ch // 2
     fx, fy = cx - sw // 2, cy - sh // 2
-    bar_w, bar_h = 460, 16
-    bx, by = (W - bar_w) // 2, cy + sh // 2 + 64
-    font = load_font(46)
-    cap_font = load_font(42)
-    cy_cap = fy - 96
+    bar_w, bar_h = int(460 * s), max(6, int(16 * s))
+    bx, by = (cw - bar_w) // 2, cy + sh // 2 + int(64 * s)
+    font = load_font(max(12, int(46 * s)))
+    cap_font = load_font(max(10, int(42 * s)))
+    cy_cap = fy - int(96 * s)
 
-    base = bg.convert("RGB") if bg is not None else Image.new("RGB", (W, H), (8, 9, 13))
+    base = bg.convert("RGB") if bg is not None else Image.new("RGB", (cw, ch), (8, 9, 13))
     n = max(1, int(round(FPS * upload_sec)))
     for i in range(n):
         prog = min(1.0, (i + 1) / n)
@@ -162,7 +164,7 @@ def render_upload_frames(framed_path: Path, out_dir: Path,
 
         label = f"{gen_label}  {pct}%" if gen_label else f"{pct}%"
         tw = d.textlength(label, font=font)
-        d.text((cx - tw / 2, by - 70), label, font=font, fill=(255, 255, 255))
+        d.text((cx - tw / 2, by - int(70 * s)), label, font=font, fill=(255, 255, 255))
 
         d.rounded_rectangle([bx, by, bx + bar_w, by + bar_h],
                             radius=bar_h // 2, fill=(40, 44, 60))
@@ -174,24 +176,39 @@ def render_upload_frames(framed_path: Path, out_dir: Path,
     return n
 
 
-def frame_image(src: Path, dst: Path, inner_w: int = KF_INNER_W) -> None:
+def frame_image(src: Path, dst: Path, inner_w: int = KF_INNER_W,
+                radius_pct: float = 0) -> None:
     """给关键帧加白色细边 + 投影，输出居中可叠加的 RGBA PNG。
-    白框外沿宽 = inner_w + 2*KF_BORDER；整图四周各留 KF_MARGIN 给投影。"""
+    radius_pct: 圆角占短边的百分比(0=直角, 50=最圆)。白边/投影都跟随圆角。"""
     im = Image.open(src).convert("RGB")
     w, h = im.size
     inner_h = max(1, round(h * inner_w / w))
-    im = im.resize((inner_w, inner_h))
-    framed = ImageOps.expand(im, border=KF_BORDER, fill="white").convert("RGBA")
-    fw, fh = framed.size
+    im = im.resize((inner_w, inner_h)).convert("RGBA")
+
+    R = int(max(0.0, min(50.0, radius_pct)) / 100 * min(inner_w, inner_h))
+    Rb = R + KF_BORDER
+    box_w, box_h = inner_w + 2 * KF_BORDER, inner_h + 2 * KF_BORDER
+
+    # 白色圆角卡片
+    card = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    ImageDraw.Draw(card).rounded_rectangle(
+        [0, 0, box_w - 1, box_h - 1], radius=Rb, fill=(255, 255, 255, 255))
+    # 图片按圆角遮罩贴入卡片
+    mask = Image.new("L", (inner_w, inner_h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, inner_w - 1, inner_h - 1], radius=R, fill=255)
+    card.paste(im, (KF_BORDER, KF_BORDER), mask)
 
     m = KF_MARGIN
-    canvas = Image.new("RGBA", (fw + 2 * m, fh + 2 * m), (0, 0, 0, 0))
+    canvas = Image.new("RGBA", (box_w + 2 * m, box_h + 2 * m), (0, 0, 0, 0))
     shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    rect = Image.new("RGBA", (fw, fh), (0, 0, 0, KF_SHADOW_ALPHA))
-    shadow.paste(rect, (m + KF_SHADOW_OFFSET, m + KF_SHADOW_OFFSET))
+    sil = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    ImageDraw.Draw(sil).rounded_rectangle(
+        [0, 0, box_w - 1, box_h - 1], radius=Rb, fill=(0, 0, 0, KF_SHADOW_ALPHA))
+    shadow.paste(sil, (m + KF_SHADOW_OFFSET, m + KF_SHADOW_OFFSET))
     shadow = shadow.filter(ImageFilter.GaussianBlur(KF_SHADOW_BLUR))
     canvas = Image.alpha_composite(canvas, shadow)
-    canvas.alpha_composite(framed, (m, m))
+    canvas.alpha_composite(card, (m, m))
     canvas.save(dst)
 
 
@@ -211,10 +228,10 @@ def _extract_frame(video: Path, ts: float, dst: Path) -> bool:
     return dst.exists() and dst.stat().st_size > 0
 
 
-def _bg_from_frame(src_img: Path) -> Image.Image:
+def _bg_from_frame(src_img: Path, cw: int = W, ch: int = H) -> Image.Image:
     """把一帧做成第一幕背景：铺满画布 + 高斯模糊 + 压暗。"""
     im = Image.open(src_img).convert("RGB")
-    im = ImageOps.fit(im, (W, H), method=Image.LANCZOS)
+    im = ImageOps.fit(im, (cw, ch), method=Image.LANCZOS)
     im = im.filter(ImageFilter.GaussianBlur(26))
     return ImageEnhance.Brightness(im).enhance(0.32)
 
@@ -248,8 +265,14 @@ def build_segments(vids: list[Path], target: float,
     return segs
 
 
-def pick_keyframe(sources: list[str] | None = None) -> dict:
-    """随机抽一帧（随机视频 + 视频内随机位置），描边存为预览，返回 id。"""
+def _src_for(kid: str) -> Path | None:
+    """自定义关键帧保留的原图（供合成时按当前圆角/尺寸重新描边）。"""
+    hits = list(KEYFRAME_DIR.glob(f"{kid}.src.*"))
+    return hits[0] if hits else None
+
+
+def pick_keyframe(sources: list[str] | None = None, radius_pct: float = 0) -> dict:
+    """随机抽一帧（随机视频 + 视频内随机位置），保留原图并描边预览，返回 id。"""
     vids = library(sources)
     if not vids:
         raise RuntimeError("没有可取材的视频")
@@ -257,19 +280,21 @@ def pick_keyframe(sources: list[str] | None = None) -> dict:
     kf_src = random.choice(vids)
     ts = _rand_ts(duration(kf_src))
     kid = _new_id()
-    raw = KEYFRAME_DIR / f"raw_{kid}.jpg"
+    raw = KEYFRAME_DIR / f"{kid}.src.jpg"
     if not _extract_frame(kf_src, ts, raw):
         raise RuntimeError("抽帧失败")
-    frame_image(raw, KEYFRAME_DIR / f"{kid}.png")
-    raw.unlink(missing_ok=True)
+    frame_image(raw, KEYFRAME_DIR / f"{kid}.png", radius_pct=radius_pct)
     return {"id": kid, "from": kf_src.parent.name + "/" + kf_src.name}
 
 
-def frame_uploaded(src_path: Path) -> dict:
-    """把用户上传的图片描边存为关键帧，返回 id。"""
+def frame_uploaded(src_path: Path, radius_pct: float = 0) -> dict:
+    """把用户上传的图片保留原图并描边，返回 id。"""
     KEYFRAME_DIR.mkdir(parents=True, exist_ok=True)
     kid = _new_id()
-    frame_image(src_path, KEYFRAME_DIR / f"{kid}.png")
+    suffix = src_path.suffix.lower() or ".png"
+    kept = KEYFRAME_DIR / f"{kid}.src{suffix}"
+    kept.write_bytes(src_path.read_bytes())
+    frame_image(kept, KEYFRAME_DIR / f"{kid}.png", radius_pct=radius_pct)
     return {"id": kid, "from": "(上传)"}
 
 
@@ -280,16 +305,22 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
              kf_w1: float = DEFAULT_KF_W, kf_w2: float = DEFAULT_KF_W,
              bg_mode: str = "black",
              cap_prefix: str | None = None, cap_highlight: str | None = None,
-             gen_label: str | None = None) -> dict:
+             gen_label: str | None = None,
+             out_w: int = W, out_h: int = H, kf_radius: float = 0) -> dict:
     upload_sec = min(max(float(upload_sec or UPLOAD_SEC), 0.5), 15)
     clip_sec = min(max(float(clip_sec or CLIP_SEC), 1), 60)
     layout = "hstack" if layout == "hstack" else "vstack"
     op = max(0.0, min(1.0, float(kf_opacity) / 100))   # 第二幕中间图不透明度
-    kf_w1 = min(max(float(kf_w1), 60), 1000)
-    kf_w2 = min(max(float(kf_w2), 60), 1000)
+    kf_w1 = min(max(float(kf_w1), 60), 4000)
+    kf_w2 = min(max(float(kf_w2), 60), 4000)
     cap_a = CAP_PREFIX if cap_prefix is None else cap_prefix
     cap_b = CAP_HIGHLIGHT if cap_highlight is None else cap_highlight
     glabel = GEN_LABEL if gen_label is None else gen_label
+    # 输出分辨率（偶数，h264 要求）
+    cw = max(64, min(int(out_w), 4096)) & ~1
+    ch = max(64, min(int(out_h), 4096)) & ~1
+    half = ch // 2
+    kf_radius = max(0.0, min(50.0, float(kf_radius)))
 
     vids = library(sources)
     if not vids:
@@ -302,18 +333,24 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     # 1) 关键帧：自定义（抽取/上传）或随机（随机视频 + 视频内随机位置）
     raw_kf = None
     if keyframe_id:
-        framed = KEYFRAME_DIR / f"{keyframe_id}.png"
-        if not framed.exists():
-            raise RuntimeError("指定的关键帧不存在，请重新抽取或上传")
+        src = _src_for(keyframe_id)
+        if src:                              # 有原图 → 按当前圆角重新描边
+            framed = TMP / f"frame_{stamp}.png"
+            frame_image(src, framed, radius_pct=kf_radius)
+            cleanup_framed = True
+        else:                                # 老数据无原图 → 用已描边预览
+            framed = KEYFRAME_DIR / f"{keyframe_id}.png"
+            if not framed.exists():
+                raise RuntimeError("指定的关键帧不存在，请重新抽取或上传")
+            cleanup_framed = False
         kf_from = "(自定义)"
-        cleanup_framed = False
     else:
         kf_src = random.choice(vids)
         raw_kf = TMP / f"kf_{stamp}.jpg"
         if not _extract_frame(kf_src, _rand_ts(duration(kf_src)), raw_kf):
             raise RuntimeError("抽帧失败")
         framed = TMP / f"frame_{stamp}.png"
-        frame_image(raw_kf, framed)
+        frame_image(raw_kf, framed, radius_pct=kf_radius)
         kf_from = kf_src.parent.name + "/" + kf_src.name
         cleanup_framed = True
 
@@ -324,12 +361,12 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
         bg_src = random.choice(vids)
         raw_bg = TMP / f"bg_{stamp}.jpg"
         if _extract_frame(bg_src, _rand_ts(duration(bg_src)), raw_bg):
-            bg_img = _bg_from_frame(raw_bg)
+            bg_img = _bg_from_frame(raw_bg, cw, ch)
 
     # 第一幕：上传进度（PIL 逐帧 → 视频）
     p1dir = TMP / f"p1_{stamp}"
     render_upload_frames(framed, p1dir, upload_sec, kf_w=kf_w1, bg=bg_img,
-                         cap_a=cap_a, cap_b=cap_b, gen_label=glabel)
+                         cap_a=cap_a, cap_b=cap_b, gen_label=glabel, cw=cw, ch=ch)
     phase1 = TMP / f"phase1_{stamp}.mp4"
     r = subprocess.run(
         [FFMPEG, "-y", "-framerate", str(FPS), "-i", str(p1dir / "f_%04d.png"),
@@ -345,9 +382,9 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
     seg_b = build_segments(vids, clip_sec, dur_cache)   # 下 / 右
 
     if layout == "hstack":
-        pw, ph, stackf = W // 2, H, "hstack=inputs=2"
+        pw, ph, stackf = (cw // 2) & ~1, ch, "hstack=inputs=2"
     else:
-        pw, ph, stackf = W, HALF, "vstack=inputs=2"
+        pw, ph, stackf = cw, half & ~1, "vstack=inputs=2"
     scale = (f"scale={pw}:{ph}:force_original_aspect_ratio=increase,"
              f"crop={pw}:{ph},setsar=1,fps={FPS}")
 
@@ -374,7 +411,8 @@ def make_one(idx: int = 0, sources: list[str] | None = None,
         fc.append(f"[{j}:v]{scale}[b{k}]")
     fc.append("".join(f"[b{k}]" for k in range(len(b_idx)))
               + f"concat=n={len(b_idx)}:v=1:a=0[pb]")
-    fc.append(f"[pa][pb]{stackf}[stg]")
+    # 拼接后统一缩放到精确画布尺寸（避免奇数尺寸 + 保证与第一幕一致）
+    fc.append(f"[pa][pb]{stackf},scale={cw}:{ch},setsar=1[stg]")
     fc.append(f"[stg]fade=t=in:st=0:d={TRANSITION}[stf]")
 
     # 中间图缩放+淡入过渡：0~TRANSITION 秒内 尺寸 kf_w1→kf_w2、透明度 1→op

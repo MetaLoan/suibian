@@ -141,6 +141,23 @@
         </label>
         <span class="hint" style="margin:0">两幕图之间自动缩放+淡入过渡(0.5s)</span>
       </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px">
+        <label style="margin:0;display:flex;align-items:center;gap:6px">输出分辨率
+          <input id="cResW" type="number" min="64" max="4096" step="2" value="1080" style="width:74px;margin:0">×
+          <input id="cResH" type="number" min="64" max="4096" step="2" value="1920" style="width:74px;margin:0">
+        </label>
+        <select id="cResPreset" style="margin:0;width:auto">
+          <option value="">预设…</option>
+          <option value="1080x1920">竖屏 1080×1920</option>
+          <option value="720x1280">竖屏 720×1280</option>
+          <option value="1080x1080">方形 1080×1080</option>
+          <option value="1920x1080">横屏 1920×1080</option>
+        </select>
+        <label style="margin:0;display:flex;align-items:center;gap:8px">中间图圆角
+          <input id="cRadius" type="range" min="0" max="50" step="1" value="0" style="width:120px;margin:0">
+          <span id="cRadiusVal" style="color:var(--acc);min-width:34px">0%</span>
+        </label>
+      </div>
       <details style="margin-top:10px">
         <summary style="cursor:pointer;font-size:13px;color:var(--mut)">第一幕文案（点击展开编辑）</summary>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
@@ -400,6 +417,12 @@ async function refreshGallery(){
   });
 }
 $('#cOpacity').oninput = e => $('#cOpacityVal').textContent = e.target.value + '%';
+$('#cRadius').oninput = e => $('#cRadiusVal').textContent = e.target.value + '%';
+$('#cResPreset').onchange = e => {
+  const v = e.target.value; if(!v) return;
+  const [w,h] = v.split('x');
+  $('#cResW').value = w; $('#cResH').value = h;
+};
 
 // 关键帧选择
 let kfId = null;
@@ -413,7 +436,7 @@ $('#btnKfPick').onclick = async ()=>{
   const src = $('#cSource').value;
   $('#btnKfPick').disabled = true; $('#kfState').textContent = '抽取中…';
   try{
-    const r = await api('/keyframe/pick', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sources: src?[src]:null})});
+    const r = await api('/keyframe/pick', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sources: src?[src]:null, radius: parseFloat($('#cRadius').value)||0})});
     setKf(r.id, U(r.url)+'?t='+Date.now(), '已抽取：'+r.from+'（不满意可再点重抽）');
   }catch(e){ alert('抽取失败: '+e.message); $('#kfState').textContent='随机（每个视频各抽一张）'; }
   finally{ $('#btnKfPick').disabled = false; }
@@ -424,7 +447,7 @@ $('#kfFile').onchange = async e=>{
   $('#kfState').textContent = '上传处理中…';
   try{
     const fd = new FormData(); fd.append('file', f);
-    const r = await fetch(U('/api/keyframe/upload'), {method:'POST', body:fd});
+    const r = await fetch(U('/api/keyframe/upload?radius='+(parseFloat($('#cRadius').value)||0)), {method:'POST', body:fd});
     if(!r.ok) throw new Error(await r.text());
     const j = await r.json();
     setKf(j.id, U(j.url)+'?t='+Date.now(), '已上传自定义图片');
@@ -450,6 +473,9 @@ $('#btnCompose').onclick = async ()=>{
     cap_prefix: $('#cCapPrefix').value,
     cap_highlight: $('#cCapHi').value,
     gen_label: $('#cGenLabel').value,
+    out_w: parseInt($('#cResW').value)||1080,
+    out_h: parseInt($('#cResH').value)||1920,
+    kf_radius: parseFloat($('#cRadius').value)||0,
   };
   const btn = $('#btnCompose');
   btn.disabled = true; $('#cStatus').textContent = '生成中…';

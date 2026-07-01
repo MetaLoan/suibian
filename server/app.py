@@ -246,10 +246,14 @@ class ComposeIn(BaseModel):
     cap_prefix: str | None = None
     cap_highlight: str | None = None
     gen_label: str | None = None
+    out_w: int = 1080
+    out_h: int = 1920
+    kf_radius: float = 0
 
 
 class PickIn(BaseModel):
     sources: list[str] | None = None
+    radius: float = 0
 
 
 # ----------------------------- API -----------------------------
@@ -436,7 +440,8 @@ async def api_compose(body: ComposeIn):
                 body.kf_opacity,
                 kf_w1=body.kf_w1, kf_w2=body.kf_w2, bg_mode=body.bg_mode,
                 cap_prefix=body.cap_prefix, cap_highlight=body.cap_highlight,
-                gen_label=body.gen_label)
+                gen_label=body.gen_label,
+                out_w=body.out_w, out_h=body.out_h, kf_radius=body.kf_radius)
             results.append(r)
             await hub.publish({"type": "compose_done", **r, "index": i, "total": n})
         except Exception as e:  # noqa
@@ -448,19 +453,19 @@ async def api_compose(body: ComposeIn):
 @app.post("/api/keyframe/pick")
 async def api_keyframe_pick(body: PickIn):
     try:
-        r = await asyncio.to_thread(compose.pick_keyframe, body.sources)
+        r = await asyncio.to_thread(compose.pick_keyframe, body.sources, body.radius)
     except Exception as e:  # noqa
         raise HTTPException(400, str(e))
     return {**r, "url": f"/keyframe/{r['id']}.png"}
 
 
 @app.post("/api/keyframe/upload")
-async def api_keyframe_upload(file: UploadFile = File(...)):
+async def api_keyframe_upload(file: UploadFile = File(...), radius: float = 0):
     tmp = KEYFRAME_DIR / f"up_{file.filename}"
     data = await file.read()
     tmp.write_bytes(data)
     try:
-        r = await asyncio.to_thread(compose.frame_uploaded, tmp)
+        r = await asyncio.to_thread(compose.frame_uploaded, tmp, radius)
     except Exception as e:  # noqa
         raise HTTPException(400, f"图片处理失败: {e}")
     finally:
